@@ -18,15 +18,19 @@ revision.
 
 ---
 
-## 0. Two additions to the brief
+## 0. Decisions taken since the brief was written
 
-The architecture plan was written before two instructions that came with the
-approval to proceed. Both are carried through this document:
+The architecture plan predates these. All are carried through this document:
 
 1. **Reuse the HUD, menus and settings screens.** They are considered done work.
    §3 treats them as a port, not a redesign.
 2. **The Skins screen may be improved, and is dev-mode only from now on.** It is
    the one piece of UI explicitly released from "preserve as-is" (§3.6).
+3. **JSON for the Game API, binary framing for the Game Server** (§15). The two
+   do not need to align.
+4. **Native desktop client — Windows, Linux, macOS.** Not web, not mobile. This
+   settles the transport (§13: ENet, not QUIC) and removes the touch control
+   scheme from scope (§3.5).
 
 ---
 
@@ -269,14 +273,26 @@ pick buttons), `keysPanel`, and the four HUD buttons (keys / team / fullscreen /
 leave). Plus runtime widgets: announce banner, leaderboard, victory board,
 match-over card, spectator panel, touch controls.
 
-### 3.5 Mobile controls — in scope only if "native" includes mobile (§23.9)
+### 3.5 Mobile controls — out of scope (desktop only)
 
-Non-trivial and recently tuned: landscape gate, one movement stick, drag-to-aim
-with **tap-to-shoot** (a tap is <350 ms **and** <16 px of total travel), plus
-FIRE / JUMP / CROUCH / WALK / ✷SPECIAL laid out so nothing overlaps at 844×390
-*or* 667×375. The overlap constraint is currently enforced by a test that
-rectangle-checks every control against every other. Port the layout **and** that
-test.
+**Decided: desktop native only.** Windows, Linux and macOS. Not mobile, not web.
+The touch scheme is therefore **not ported**, and the touch half of Milestone 10
+comes out of the plan.
+
+Recorded rather than lost, because it is recent, tuned work and re-deriving it
+later would be wasteful: landscape gate; one movement stick; drag-to-aim on the
+open right half with **tap-to-shoot** (a tap is under 350 ms *and* under 16 px of
+total travel, summed rather than net, so a finger that wanders out and back is a
+drag); FIRE / JUMP / CROUCH / WALK / ✷SPECIAL along the bottom edge; and a layout
+verified not to overlap at 844×390 or 667×375 by a test that rectangle-checks
+every control against every other. If mobile ever returns, that is the design to
+return to.
+
+**What desktop-only buys.** Input is keyboard + mouse with pointer lock, so the
+bind system (§4's `BIND_DEFAULTS`, rebindable with primary/alt slots) ports
+directly and the HUD has one layout to satisfy rather than three. The landscape
+gate, the touch overlap constraint, and the `IS_TOUCH` branches throughout the
+client all disappear.
 
 ### 3.6 The Skins screen — improve, and gate behind dev mode
 
@@ -407,7 +423,7 @@ ion-strikers-game/
     internal/{discovery,lobby,serverreg,auth,httpapi,config}/
   game/                       # Godot client project (project.godot lives here)
     scenes/{boot,menu,match,viewer}/
-    ui/{theme,screens,hud,mobile}/
+    ui/{theme,screens,hud}/
     assets/                   # imported content (see §2)
   server/                     # Godot headless server project
     scenes/
@@ -982,13 +998,13 @@ leaks a resource silently starves its own later sections.
 8. **20 lobbies in one process** is untested for this workload; the capacity
    number should be treated as a target to be validated by the soak test, not a
    guarantee.
-9. **Does "native" include mobile?** Godot exports to Android and iOS as
-   natively as it does to desktop, and the current game has a complete, recently
-   tuned touch scheme — landscape gate, movement stick, drag-to-aim with
-   tap-to-shoot, and a button layout proven not to overlap at 844×390 and
-   667×375 (§3.5). If mobile is in scope that work ports; if desktop-only, §3.5
-   and the touch half of Milestone 10 come out of the plan entirely. A real
-   scope difference, worth naming rather than assuming.
+9. **Distribution and updates — the cost of going native.** A browser game
+   updates by reloading; a desktop build does not. Players need a way to get it
+   (direct download, itch.io, Steam) and a way to stay in step with the server,
+   or the version gate in §9 turns into "your client is too old" with no path
+   forward. The Game API already tracks build and protocol version, so the hook
+   exists — but the delivery channel is a product decision, and Milestone 12
+   should not be the first time it is discussed.
 
 ---
 
@@ -996,7 +1012,7 @@ leaks a resource silently starves its own later sections.
 
 | # | Milestone | Acceptance |
 |---|---|---|
-| 0 | Research + ADRs | §7/§13/§15 decisions recorded with rejected alternatives; §23 items 1, 2, 5 and 9 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
+| 0 | Research + ADRs | Target platforms fixed (Windows, Linux, macOS desktop); §7/§13/§15 decisions recorded with rejected alternatives; §23 items 1, 2, 5 and 9 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
 | 1 | Repo bootstrap | Fresh clone builds the GDExtension and opens both Godot projects with pinned stable tools on all three platforms. |
 | 2 | `game-core` + lifecycle | Movement, hitbox and rules ported; unit tests pass with no engine. Lifecycle tests show owned state destroyed, not reset. Invalid transitions fail loudly. |
 | 3 | Headless server skeleton | Same binary runs managed 0..20 and dedicated 1/1. Capacity reported; 21st create rejected. |
@@ -1006,7 +1022,7 @@ leaks a resource silently starves its own later sections.
 | 7 | First playable | Spawn, move, fire, authoritative hit/death/respawn/score, Classic + DM minimum rules. Two clients complete a match; all match state destroyed after. |
 | 8 | Prediction and feel | Input replay reconciliation; movement indistinguishable from the live build at 0 ms and acceptable at 100 ms. Side-by-side comparison against the live build is the acceptance test. |
 | 9 | Assets and animation | Mannequin, arms, guns, maps, audio migrated; gun-ready locomotion reproduced via `AnimationTree`; ragdoll re-implemented or replaced. |
-| 10 | HUD, mobile, Skins | Full HUD parity per §3.4; mobile controls with the overlap test; Skins screen rebuilt and dev-gated. |
+| 10 | HUD and Skins | Full HUD parity per §3.4 at desktop resolutions; keyboard/mouse binds with primary and alt slots, rebindable; Skins screen rebuilt and dev-gated. |
 | 11 | Persistence | Versioned snapshots, coalesced writes, metrics, read-back tests. No host migration. |
 | 12 | Hardening | Containers, health/readiness, graceful drain, multi-lobby and dedicated soak clean. |
 
