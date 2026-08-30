@@ -586,7 +586,7 @@ passes the balance check — and should be kept.
 
 ---
 
-## 13. Transport — and a conflict with the brief
+## 13. Transport — ENet reliable-UDP (a conflict with the brief, raised)
 
 **This section was revised after review.** The brief names QUIC as the realtime
 transport. Having checked what Godot 4.7.2 actually ships, I think that should be
@@ -610,7 +610,7 @@ opened 2022-01-31, **still open** at 2026-08-05 with 62 reactions and no
 implementation. There is no `WebTransport` class in 4.7.2. So it cannot be
 planned against — it can only be *watched*.
 
-### 13.2 The decision actually hinges on the client platform
+### 13.2 What each option can and cannot serve
 
 | | Native client | Browser client |
 |---|---|---|
@@ -634,38 +634,86 @@ Two things follow, and the second is the uncomfortable one:
    where its entire current audience is — the transport must be WebSocket or
    WebRTC regardless of what the native client uses.
 
-### 13.3 Recommendation
+### 13.3 ENet *is* reliable-UDP-plus-lanes, and it does one server / many lobbies
 
-**Primary: `ENetMultiplayerPeer` as the transport for native clients**, used as a
-packet peer with the §15 framing on top — *not* via Godot's high-level RPC /
-`MultiplayerSynchronizer` replication, which couples gameplay to the scene tree
-and would undercut the ownership model in §11.
+The transport asked for — reliability layered by protocol over unreliable
+datagrams, with a reliable path where it is needed — is precisely what ENet is.
+Verified in the 4.7.2 class reference:
 
-**If browser support is required — and it should be treated as likely — add
-WebRTC DataChannel** as a second peer behind the same transport interface, with
-the Go Game API acting as the signalling server (it already brokers join, so it
-is the natural place). Godot ships `WebRTCMultiplayerPeer`; the game protocol
-above it is unchanged.
+**Per-message delivery choice.** `ENetPacketPeer.send(channel, packet, flags)`:
 
-**Custom QUIC (msquic): deferred, not adopted.** It remains a good library — MIT,
-v2.6.1, actively released — and if a future requirement genuinely needs QUIC
-semantics, `ENetConnection` and a QUIC transport can sit behind the same
-interface. But adopting it now means a substantial cross-platform C integration
-to obtain capabilities the engine already ships, while still not serving a
-browser client.
+| Flag | Delivery |
+|---|---|
+| `FLAG_RELIABLE` | reliable, ordered — retransmitted until acknowledged |
+| *(no flag)* | **unreliable but sequenced** — old packets are dropped, never redelivered |
+| `FLAG_UNSEQUENCED` | unreliable, unsequenced |
+| `FLAG_UNRELIABLE_FRAGMENT` | allows fragmenting an unreliable packet |
+
+That is the whole §14 requirement, chosen per message rather than per connection —
+input and snapshots unreliable-sequenced, handshake and match events reliable, on
+independent channels so one lane cannot block another.
+
+**One process, one port, many lobbies — yes.** `ENetConnection` wraps a raw
+`ENetHost` and exposes exactly the primitives a multi-lobby server needs:
+
+| Method | Use |
+|---|---|
+| `create_host_bound(bind_ip, port, max_peers, max_channels, …)` | **one** host, one UDP port, up to `max_peers` connections |
+| `service(timeout)` | pump connect / receive / disconnect events on the server tick |
+| `get_peers()` | every connected `ENetPacketPeer` |
+| `channel_limit()` | the lane count from §14 |
+| `refuse_new_connections()` | capacity enforcement at the transport edge |
+| `bandwidth_limit()`, `compress()` | throttling and ENet's built-in range coder |
+| `dtls_server_setup()` | **DTLS encryption**, which was one of QUIC's genuine advantages |
+
+**The design that follows.** One `ENetConnection` host in the `GameServer`.
+Each peer is bound to exactly one `GameInstance` when its join token is validated,
+and the router looks up "which instance owns this peer" on every received packet.
+Lobbies are isolated by *ownership*, not by socket — which is also how §22's
+security property ("a connection resolves to exactly one `game_id`; packets cannot
+mutate another `GameInstance`") stops being a rule someone has to remember and
+becomes the only thing the code can express.
+
+**Alternative considered and rejected: `ENetMultiplayerPeer` with one
+`MultiplayerAPI` per lobby.** Godot does support this — `SceneTree.set_multiplayer(api, root_path)`
+scopes a `MultiplayerAPI` to a scene subtree, and the docs confirm it (nesting is
+disallowed, siblings are fine). Two reasons not to:
+
+1. `create_server(port, …)` **binds a port per peer**, so 20 lobbies would mean 20
+   UDP ports to allocate, firewall and advertise. `ENetConnection` needs one.
+2. It pulls in the high-level RPC and `MultiplayerSynchronizer` replication, which
+   couple gameplay to the scene tree and would undercut the ownership model in
+   §11 — the one thing this rebuild exists to get right.
+
+### 13.4 Recommendation
+
+**Use ENet, through `ENetConnection`, with the §15 framing on top.** Native
+clients get reliable-UDP with per-message delivery and independent lanes; the
+server gets one host, one port, and N isolated lobbies; DTLS covers encryption;
+and none of it requires a third-party library, a cross-platform C build, or a
+GDExtension transport shim.
+
+**If browser support is in scope, add WebRTC DataChannel** as a second
+implementation behind the same transport interface — Godot ships
+`WebRTCMultiplayerPeer` / `WebRTCDataChannel`, unreliable delivery is available,
+and the Go Game API is the natural signalling server since it already brokers
+joins. The protocol above the transport does not change.
+
+**Custom QUIC (msquic): rejected for V1**, not deferred-with-regret. Everything it
+was being brought in for — unreliable datagrams, independent streams, encryption —
+ENet provides natively, and QUIC still would not serve a browser client.
 
 **Worth noting as evidence, not as an argument for standing still:** the current
-game runs its entire netcode over **WebSocket/TCP** at 30 Hz and plays well
-enough that nobody has complained about the transport. That is a real data point
-about how much headroom this game's requirements actually have — head-of-line
-blocking has not been the limiting factor.
+game runs its entire netcode over **WebSocket/TCP** at 30 Hz and plays well enough
+that nobody has complained about the transport. Head-of-line blocking has not been
+this game's limiting factor, which says how much headroom the requirement has.
 
-### 13.4 What this changes downstream
+### 13.5 What this changes downstream
 
-`shared/networking/` becomes a thin transport interface with two or three
-implementations (ENet, WebRTC, and optionally QUIC later) rather than an msquic
-binding. §14's lane design survives intact — it is expressed in ENet channels
-instead of QUIC streams, which is a rename, not a redesign.
+`shared/networking/` becomes a thin transport interface with two implementations
+(ENet, and WebRTC if web is in scope) rather than an msquic binding. §14's lane
+design survives intact — expressed as ENet channels instead of QUIC streams,
+which is a rename, not a redesign.
 
 ---
 
@@ -934,7 +982,10 @@ leaks a resource silently starves its own later sections.
 - Rate-limit per connection; one malformed client must not destabilise a
   multi-lobby process.
 - A connection resolves to exactly one `game_id`; a packet can never mutate
-  another `GameInstance`.
+  another `GameInstance`. With the §13.3 routing this is structural: the router
+  maps peer → instance, and a packet has no field that could name a different one.
+- Transport encryption via `ENetConnection.dtls_server_setup()` (DTLS), so
+  dropping QUIC does not mean dropping encryption.
 - Management and debug surfaces off the public path.
 - Keep the existing chat discipline: 50-char cap, control/bidi codepoints
   stripped server-side, token-bucket rate limit, and **rendered as text, never
@@ -944,14 +995,15 @@ leaks a resource silently starves its own later sections.
 
 ## 23. Risks and decisions needing approval
 
-1. **Transport: the brief says QUIC; §13 recommends ENet (+ WebRTC for browsers).**
-   Raised under the plan's own clause for concrete technical conflicts. The
-   sub-decision that drives it: **is Ion Strikers still a URL you click?** Today
-   that is its entire audience. If yes, the transport must be WebSocket or WebRTC
-   whatever the native client does, because a browser can speak neither raw UDP
-   nor raw QUIC — and Godot has no WebTransport (proposal #3899, open since 2022,
-   unimplemented). **This is the decision most worth making first**, because §16's
-   prediction work and §20's network-conditions tests both sit on top of it.
+1. **Is Ion Strikers still a URL you click?** Today that is its entire audience.
+   The transport question itself is settled — ENet gives reliable-UDP, lanes,
+   DTLS and one-port multi-lobby natively (§13.3), and QUIC is rejected for V1
+   under the brief's own clause for concrete technical conflicts. What remains
+   open is only the *browser*: a browser can speak neither raw UDP nor raw QUIC,
+   and Godot has no WebTransport (proposal #3899, open since 2022, unimplemented).
+   If web is in scope, a WebRTC DataChannel peer goes in behind the same
+   interface. **Worth deciding first**, because it is the only thing that changes
+   the shape of Milestone 5.
 
 2. **Map authoring moves into the Godot editor (§2.3),** which retires the bespoke
    web map editor (`editor-server.js`, `public/editor.js`, and the map-authoring
@@ -996,7 +1048,7 @@ leaks a resource silently starves its own later sections.
 | 2 | `game-core` + lifecycle | Movement, hitbox and rules ported; unit tests pass with no engine. Lifecycle tests show owned state destroyed, not reset. Invalid transitions fail loudly. |
 | 3 | Headless server skeleton | Same binary runs managed 0..20 and dedicated 1/1. Capacity reported; 21st create rejected. |
 | 4 | Game API | Register, heartbeat, create, list, join, TTL eviction, version gating. A CLI can create and discover a lobby. |
-| 5 | Transport | Handshake, auth, reliable + unreliable lanes on the chosen transport (§13), connection→game routing. Two clients reach the correct instance; cross-lobby leakage test passes. If browser support is in scope, a WebRTC peer passes the same suite. |
+| 5 | Transport | One `ENetConnection` host on one port; handshake, auth, reliable + unreliable lanes on channels, peer→instance routing. Two clients in *different* lobbies on the *same* port reach the correct instance; cross-lobby leakage test passes. If browser support is in scope, a WebRTC peer passes the same suite. |
 | 6 | Client skeleton + UI port | Callsign, menu, join, create, settings screens with the §3.3 theme; exclusive screen manager with the ui.test contract re-expressed. |
 | 7 | First playable | Spawn, move, fire, authoritative hit/death/respawn/score, Classic + DM minimum rules. Two clients complete a match; all match state destroyed after. |
 | 8 | Prediction and feel | Input replay reconciliation; movement indistinguishable from the live build at 0 ms and acceptable at 100 ms. Side-by-side comparison against the live build is the acceptance test. |
