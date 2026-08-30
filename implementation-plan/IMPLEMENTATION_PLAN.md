@@ -68,7 +68,7 @@ announcer, and the server-authority discipline — the client already sends
 *intent* (`shot` carries a ray; the server decides the hit) and never asserts
 damage, kills or score.
 
-**What must not be carried over:** the transport and encoding (§14–15), the
+**What must not be carried over:** the encoding (§15), the
 single-process-does-everything shape, and the state-reset-by-enumeration pattern
 (§5).
 
@@ -133,24 +133,59 @@ All are `.mp3`/`.ogg`/`.wav` and import into Godot directly. Note
 `ATTRIBUTION.md` records provenance per pack — that file must
 travel with the assets.
 
-### 2.3 Maps — data, not scenes
+### 2.3 Maps — lift the box limit, keep a collision proxy
 
-Seven maps as **plain data modules** (`public/maps/*.data.js`): an id, name,
-description, arena radius, a procedural sky spec, and a `shapes` array of boxes
-with optional rotation, height offset and `top` (standable) flag. Example:
-`public/maps/parkour.data.js`. `maps-loader.js` is shared by client and server,
-so **both halves already build collision from the same source** — a property
-worth keeping.
+**This section was revised after review.** The first draft recommended keeping
+the box-only data format and rejecting Godot scenes. That reasoning was inherited
+from a constraint that does not exist in Godot, and it was wrong.
 
-Migration: keep the data format, port the loader to C++, and generate Godot
-geometry + `CollisionShape3D`s at load. **Rejected:** converting maps to `.tscn`
-scenes — it would fork the data between client and server and lose the shared
-collider derivation that makes client prediction agree with the server today.
+**Why the current format is boxes.** Seven maps are plain data modules
+(`public/maps/*.data.js`): id, name, arena radius, a procedural sky spec, and a
+`shapes` array of boxes with optional rotation, height offset and a `top`
+(standable) flag. `maps-loader.js` is shared by client and server so both build
+identical colliders. That sharing exists because **neither side has a physics
+engine** — a browser JS client and a Node server, so they hand-rolled a collider
+both could run, and a hand-rolled collider is only cheap if everything is a box.
+It is a workaround for the old stack, not a design goal.
 
-The repo also contains a live map editor (`editor-server.js`, `public/editor.js`,
-`public/editor.html`, `.pi/skills/map-authoring/SKILL.md`). It is a content tool,
-not gameplay; it should be kept working against the data format rather than
-ported into the game client.
+**None of that constrains Godot.** Confirmed in the 4.7.2 module list: `jolt_physics`
+and `godot_physics_3d` (Jolt is the default 3D engine since 4.4), `csg` for
+authoring, `gridmap`, `navigation_3d`, and — directly relevant — `vhacd`,
+in-engine convex decomposition. Trimesh (`ConcavePolygonShape3D`), convex hulls,
+heightmaps and primitives are all available for static level geometry. And in the
+new architecture **both client and server are Godot**, so "share the source of
+truth" no longer implies "share a box list" — they can load the same scene.
+
+**Recommendation: author maps as Godot scenes, and bake a collision proxy.**
+
+- **Visuals:** arbitrary geometry. Ramps, curves, detailed meshes, real materials
+  — everything the box format forbids. Authored in the Godot editor, which is a
+  far better tool than the bespoke web editor the project maintains today.
+- **Collision:** a proxy generated at import — convex hulls (V-HACD is in-engine)
+  or collision volumes the author places explicitly. The proxy, not the visual
+  mesh, is what the character controller runs against.
+
+**Why a proxy rather than just using the render mesh.** It keeps the movement
+controller (§4, §8) engine-free, deterministic and unit-testable without a
+display server, and keeps client prediction and server simulation running
+*identical* code — the property that makes the current game's predicted impacts
+agree with its authoritative ones. Convex-only collision is also what a
+Source-style controller wants; trimesh against a swept capsule is where
+character controllers acquire their worst edge cases. Visual mesh ≠ collision
+hull is standard practice in shooters for exactly this reason.
+
+**The seven existing maps port mechanically.** A one-off tool reads each
+`*.data.js` and emits a Godot scene of boxes plus the matching proxy — nothing is
+lost, and each map can then be enriched in the editor at leisure. Note the maps
+are authored half-and-mirrored (`public/maps/parkour.data.js`: "authored for the
+BLUE half and mirrored to the red half"); that symmetry convention is worth
+keeping in whatever authoring flow replaces it.
+
+**Consequence for the map editor.** `editor-server.js` / `public/editor.js` /
+`.pi/skills/map-authoring/SKILL.md` become redundant once authoring moves into
+the Godot editor. That is a *gain* — one less bespoke tool — but it is a real
+piece of working software being retired, so it belongs on the decision list
+(§23.2) rather than being dropped silently.
 
 ### 2.4 UI assets — there are none
 
@@ -551,52 +586,109 @@ passes the balance check — and should be kept.
 
 ---
 
-## 13. QUIC library
+## 13. Transport — and a conflict with the brief
 
-Verified 2026-08-30:
+**This section was revised after review.** The brief names QUIC as the realtime
+transport. Having checked what Godot 4.7.2 actually ships, I think that should be
+reconsidered, and the plan invites exactly this: *"treat the architecture
+decisions below as project constraints unless the Phase 3 proposal identifies a
+concrete technical conflict that should be raised for approval."* This is one.
 
-| Library | Version | Licence | Language |
-|---|---|---|---|
-| **msquic** | v2.6.1 (2026-08-28) | **MIT** | C |
-| quiche | 0.29.3 (2026-07-14) | BSD-2-Clause | Rust (C API) |
-| ngtcp2 | v1.25.0 (2026-07-26) | MIT | C |
-| lsquic | — | MIT | C |
-| quic-go | v0.62.0 (2026-08-30) | MIT | Go |
+### 13.1 What Godot 4.7.2 actually has
 
-**Recommendation: msquic for the C++ Game Server and client.** MIT, actively
-released (nine days ago), a native C API that a C++ GDExtension can link without
-adding a second language toolchain, first-class DATAGRAM support, and
-cross-platform (Windows/Linux/macOS) which matters because the client ships on
-all three.
+Read from the engine's own module list and doc classes at tag `4.7.2-stable`:
 
-- **quiche** rejected primarily on *build*, not quality: it would put a Rust
-  toolchain plus cbindgen into the critical path of every contributor and CI job
-  building a Godot C++ extension.
-- **ngtcp2** rejected as more integration work — it deliberately leaves TLS to
-  the caller, so we would own the OpenSSL/BoringSSL binding too.
-- **lsquic** deferred: fine licence, but a smaller cross-platform client story.
-- **quic-go** adopted *only* on the Go side, for HTTP/3 on the API and for
-  writing network test clients (§20) without a C++ harness.
-
----
-
-## 14. Datagram vs stream
-
-| Traffic | Primitive | Why |
+| Module | Classes | Transport |
 |---|---|---|
-| Input samples (60 Hz) | DATAGRAM | Newer input supersedes older; loss must not block. |
-| Snapshots (30 Hz) | DATAGRAM | A lost old snapshot must not hold a newer one behind it. |
-| Handshake, version negotiation | Stream (control) | Must arrive and be ordered. |
-| Join authorisation | Stream (control) | Security and state transition. |
-| Initial world/map baseline | Stream (bulk) | Client needs a complete baseline before deltas. |
-| Match/round transitions, kill events, chat | Stream (events) | Cannot silently disappear. |
+| `enet` | `ENetMultiplayerPeer`, `ENetConnection`, `ENetPacketPeer` | **UDP**, channels, reliable / unreliable / unsequenced |
+| `websocket` | `WebSocketMultiplayerPeer`, `WebSocketPeer` | TCP |
+| `webrtc` | `WebRTCMultiplayerPeer`, `WebRTCDataChannel`, `WebRTCPeerConnection` | SCTP/DTLS — **works in browsers**, supports unreliable/unordered |
 
-**Three reliable streams, not one and not one-per-event:** `control` (handshake,
-auth, capacity), `events` (round/match transitions, kills, chat), `bulk` (map and
-baseline). The bulk transfer is the reason to separate them — a baseline download
-must not delay a round-start event behind it.
+**WebTransport is not in Godot.** It is proposal
+[godot-proposals#3899](https://github.com/godotengine/godot-proposals/issues/3899),
+opened 2022-01-31, **still open** at 2026-08-05 with 62 reactions and no
+implementation. There is no `WebTransport` class in 4.7.2. So it cannot be
+planned against — it can only be *watched*.
+
+### 13.2 The decision actually hinges on the client platform
+
+| | Native client | Browser client |
+|---|---|---|
+| **ENet (UDP)** | ✅ ideal — channels, unreliable, zero integration | ❌ browsers cannot open raw UDP |
+| **WebSocket (TCP)** | works, head-of-line blocking | ✅ **what the game uses today** |
+| **WebRTC DataChannel** | works | ✅ unreliable available; needs signalling + STUN/TURN |
+| **QUIC (msquic)** | ✅ but a large custom integration | ❌ browsers cannot speak raw QUIC |
+| **WebTransport** | — | would be ideal; **does not exist in Godot** |
+
+Two things follow, and the second is the uncomfortable one:
+
+1. **For native clients, ENet is strictly simpler than QUIC and gives the same
+   thing that matters.** UDP with a reliable channel and an unreliable channel is
+   the entire requirement in §14. ENet is in the engine, is the transport Godot's
+   multiplayer stack is built around, and needs no third-party library, no
+   cross-platform C build, and no GDExtension transport shim. QUIC's genuine
+   advantages over it — TLS by default, connection migration, independent
+   streams — are real but are not what this game is short of.
+2. **QUIC does not buy the browser back.** A browser cannot speak raw QUIC. If
+   Ion Strikers is to stay a URL you click — which is what it is *today*, and
+   where its entire current audience is — the transport must be WebSocket or
+   WebRTC regardless of what the native client uses.
+
+### 13.3 Recommendation
+
+**Primary: `ENetMultiplayerPeer` as the transport for native clients**, used as a
+packet peer with the §15 framing on top — *not* via Godot's high-level RPC /
+`MultiplayerSynchronizer` replication, which couples gameplay to the scene tree
+and would undercut the ownership model in §11.
+
+**If browser support is required — and it should be treated as likely — add
+WebRTC DataChannel** as a second peer behind the same transport interface, with
+the Go Game API acting as the signalling server (it already brokers join, so it
+is the natural place). Godot ships `WebRTCMultiplayerPeer`; the game protocol
+above it is unchanged.
+
+**Custom QUIC (msquic): deferred, not adopted.** It remains a good library — MIT,
+v2.6.1, actively released — and if a future requirement genuinely needs QUIC
+semantics, `ENetConnection` and a QUIC transport can sit behind the same
+interface. But adopting it now means a substantial cross-platform C integration
+to obtain capabilities the engine already ships, while still not serving a
+browser client.
+
+**Worth noting as evidence, not as an argument for standing still:** the current
+game runs its entire netcode over **WebSocket/TCP** at 30 Hz and plays well
+enough that nobody has complained about the transport. That is a real data point
+about how much headroom this game's requirements actually have — head-of-line
+blocking has not been the limiting factor.
+
+### 13.4 What this changes downstream
+
+`shared/networking/` becomes a thin transport interface with two or three
+implementations (ENet, WebRTC, and optionally QUIC later) rather than an msquic
+binding. §14's lane design survives intact — it is expressed in ENet channels
+instead of QUIC streams, which is a rename, not a redesign.
 
 ---
+
+## 14. Reliable and unreliable lanes
+
+Unchanged in intent from the QUIC formulation; the mapping is per transport.
+
+| Traffic | Delivery | ENet | QUIC (if ever) |
+|---|---|---|---|
+| Input samples (60 Hz) | unreliable, sequenced | channel 0, `UNRELIABLE` | DATAGRAM |
+| Snapshots (30 Hz) | unreliable, sequenced | channel 0, `UNRELIABLE` | DATAGRAM |
+| Handshake, auth, capacity | reliable | channel 1, `RELIABLE` | control stream |
+| Match/round events, kills, chat | reliable | channel 2, `RELIABLE` | events stream |
+| Map / baseline transfer | reliable, bulk | channel 3, `RELIABLE` | bulk stream |
+
+The reason for separate reliable lanes is the same either way: a bulk baseline
+transfer must not delay a round-start event queued behind it. ENet channels give
+that independence directly — that is what channels are for.
+
+Newer input supersedes older, so a lost input packet must never block a later
+one; likewise a lost snapshot must not hold a newer snapshot behind it. That is
+the whole argument for the unreliable lane, and it is why WebSocket-only would be
+a compromise rather than a choice.
 
 ## 15. Protocol and serialization
 
@@ -626,8 +718,9 @@ u8   flags
 ...  payload
 ```
 
-**Datagrams** are already length-delimited by QUIC, so a size field would be
-dead weight on the highest-frequency traffic in the game. Omitted deliberately:
+**Unreliable packets** are already length-delimited by the transport — true of
+both ENet packets and QUIC datagrams — so a size field would be dead weight on
+the highest-frequency traffic in the game. Omitted deliberately:
 
 ```
 u8   type
@@ -851,33 +944,46 @@ leaks a resource silently starves its own later sections.
 
 ## 23. Risks and decisions needing approval
 
-1. **godot-cpp has no stable tag for Godot 4.7 (§7).** Recommendation is 4.7.2
+1. **Transport: the brief says QUIC; §13 recommends ENet (+ WebRTC for browsers).**
+   Raised under the plan's own clause for concrete technical conflicts. The
+   sub-decision that drives it: **is Ion Strikers still a URL you click?** Today
+   that is its entire audience. If yes, the transport must be WebSocket or WebRTC
+   whatever the native client does, because a browser can speak neither raw UDP
+   nor raw QUIC — and Godot has no WebTransport (proposal #3899, open since 2022,
+   unimplemented). **This is the decision most worth making first**, because §16's
+   prediction work and §20's network-conditions tests both sit on top of it.
+
+2. **Map authoring moves into the Godot editor (§2.3),** which retires the bespoke
+   web map editor (`editor-server.js`, `public/editor.js`, and the map-authoring
+   skill). Net simplification, but it is working software being deliberately
+   dropped, so it should be an explicit call rather than a silent consequence.
+
+3. **godot-cpp has no stable tag for Godot 4.7 (§7).** Recommendation is 4.7.2
    engine + `godot-4.5-stable` bindings at `api_version=4.5`, which upstream
    documents as supported. The conservative alternative is pinning the engine to
    4.5-stable for an exactly matched pair. **Needs a decision.**
-2. **Server-authoritative movement is a behaviour change.** Today the server
+4. **Server-authoritative movement is a behaviour change.** Today the server
    accepts client position; making it authoritative is correct but will alter
    feel under latency until reconciliation is tuned. Milestone 8 exists for this
    and should not be compressed.
-3. **The rebuild target is moving.** The PlayCanvas game is live and shipped
+5. **The rebuild target is moving.** The PlayCanvas game is live and shipped
    twelve features today. This document was written against `laser-arena`
    `a44e11b`. Recommend tagging that commit in the reference repository (e.g.
    `reference/plan-2026-08-30`) so the baseline is named rather than implied, and
    re-reading deliberately when it moves.
-4. **Animation bake (§2.1)** assumes `AnimationTree` bone filtering reproduces
+6. **Animation bake (§2.1)** assumes `AnimationTree` bone filtering reproduces
    the current gun-ready look. Needs a spike before Milestone 9 is estimated.
-5. **Emoji glyphs in the HUD (§2.4)** need vector replacements or a font that
+7. **Emoji glyphs in the HUD (§2.4)** need vector replacements or a font that
    covers them.
-6. **Two codecs from one schema (§15.5)** need a generator; writing it is a
+8. **Two codecs from one schema (§15.5)** need a generator; writing it is a
    small task but it is a task, and it belongs in Milestone 0 rather than being
    discovered in Milestone 5.
-7. **20 lobbies in one process** is untested for this workload; the capacity
+9. **20 lobbies in one process** is untested for this workload; the capacity
    number should be treated as a target to be validated by the soak test, not a
    guarantee.
-8. **Web build.** The current game is a URL you click. Godot can export to web,
-   but QUIC is not available to a browser client — a web build would need
-   WebTransport. Out of scope here, but it is a real audience change and should
-   be an explicit product decision.
+10. **Web build — now analysed rather than deferred (§13.2).** Godot exports to
+    web, and WebRTC DataChannel gives a browser client an unreliable lane today.
+    The open part is not "can we?" but "do we?", and it is folded into decision 1.
 
 ---
 
@@ -885,12 +991,12 @@ leaks a resource silently starves its own later sections.
 
 | # | Milestone | Acceptance |
 |---|---|---|
-| 0 | Research + ADRs | §7/§13/§15 decisions recorded with rejected alternatives; §23 items 1 and 4 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
+| 0 | Research + ADRs | §7/§13/§15 decisions recorded — **§13 transport and the browser question first** — with rejected alternatives; §23 items 1, 2, 3 and 6 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
 | 1 | Repo bootstrap | Fresh clone builds the GDExtension and opens both Godot projects with pinned stable tools on all three platforms. |
 | 2 | `game-core` + lifecycle | Movement, hitbox and rules ported; unit tests pass with no engine. Lifecycle tests show owned state destroyed, not reset. Invalid transitions fail loudly. |
 | 3 | Headless server skeleton | Same binary runs managed 0..20 and dedicated 1/1. Capacity reported; 21st create rejected. |
 | 4 | Game API | Register, heartbeat, create, list, join, TTL eviction, version gating. A CLI can create and discover a lobby. |
-| 5 | QUIC transport | Handshake, auth, three reliable streams, datagram lanes, connection→game routing. Two clients reach the correct instance; cross-lobby leakage test passes. |
+| 5 | Transport | Handshake, auth, reliable + unreliable lanes on the chosen transport (§13), connection→game routing. Two clients reach the correct instance; cross-lobby leakage test passes. If browser support is in scope, a WebRTC peer passes the same suite. |
 | 6 | Client skeleton + UI port | Callsign, menu, join, create, settings screens with the §3.3 theme; exclusive screen manager with the ui.test contract re-expressed. |
 | 7 | First playable | Spawn, move, fire, authoritative hit/death/respawn/score, Classic + DM minimum rules. Two clients complete a match; all match state destroyed after. |
 | 8 | Prediction and feel | Input replay reconciliation; movement indistinguishable from the live build at 0 ms and acceptable at 100 ms. Side-by-side comparison against the live build is the acceptance test. |
