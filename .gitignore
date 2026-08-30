@@ -1,1 +1,7 @@
 node_modules/
+
+# Godot. The .import files are settings, not build output — mannequin.glb's
+# carries the gun-ready bake — so they are versioned; only the cache they point
+# into is not.
+game/.godot/
+game/export_presets.cfg

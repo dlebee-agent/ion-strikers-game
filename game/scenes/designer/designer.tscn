@@ -1,0 +1,250 @@
+[gd_scene load_steps=2 format=3 uid="uid://dsgn0001"]
+
+[ext_resource type="Script" path="res://scenes/designer/designer.gd" id="1"]
+
+[node name="Designer" type="Node3D"]
+script = ExtResource("1")
+
+[node name="WorldEnv" type="WorldEnvironment" parent="."]
+
+[node name="UILayer" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="DesignerHUD" type="Control" parent="UILayer"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+
+[node name="Crosshair" type="Control" parent="UILayer/DesignerHUD"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -8.0
+offset_top = -8.0
+offset_right = 8.0
+offset_bottom = 8.0
+mouse_filter = 2
+
+[node name="CrosshairDot" type="ColorRect" parent="UILayer/DesignerHUD/Crosshair"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -2.0
+offset_top = -2.0
+offset_right = 2.0
+offset_bottom = 2.0
+color = Color(0.306, 0.886, 0.961, 0.9)
+
+[node name="BottomLeft" type="VBoxContainer" parent="UILayer/DesignerHUD"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 20.0
+offset_top = -80.0
+offset_right = 200.0
+grow_vertical = 0
+theme_override_constants/separation = 4
+
+[node name="HPLabel" type="Label" parent="UILayer/DesignerHUD/BottomLeft"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "100"
+theme_override_font_sizes/font_size = 36
+theme_override_colors/font_color = Color(0.306, 0.886, 0.961, 1)
+
+[node name="GunLabel" type="Label" parent="UILayer/DesignerHUD/BottomLeft"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "LASER RIFLE"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.604, 0.651, 0.761, 1)
+
+[node name="TopLeft" type="VBoxContainer" parent="UILayer/DesignerHUD"]
+layout_mode = 1
+offset_left = 20.0
+offset_top = 56.0
+offset_right = 300.0
+offset_bottom = 120.0
+
+[node name="DevLabel" type="Label" parent="UILayer/DesignerHUD/TopLeft"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "DEV · DESIGNER"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.957, 0.247, 0.369, 0.8)
+
+[node name="BottomCenter" type="HBoxContainer" parent="UILayer/DesignerHUD"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -100.0
+offset_top = -40.0
+offset_right = 100.0
+grow_horizontal = 2
+grow_vertical = 0
+
+[node name="SpecialBar" type="ProgressBar" parent="UILayer/DesignerHUD/BottomCenter"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(200, 16)
+max_value = 100.0
+value = 0.0
+show_percentage = false
+
+[node name="ControlsPanel" type="PanelContainer" parent="UILayer/DesignerHUD"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -200.0
+offset_right = 200.0
+offset_bottom = 200.0
+visible = false
+
+[node name="Scroll" type="ScrollContainer" parent="UILayer/DesignerHUD/ControlsPanel"]
+layout_mode = 2
+
+[node name="ControlsList" type="VBoxContainer" parent="UILayer/DesignerHUD/ControlsPanel/Scroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="UILayer/DesignerHUD/ControlsPanel/Scroll/ControlsList"]
+layout_mode = 2
+text = "CONTROLS"
+theme_override_font_sizes/font_size = 18
+theme_override_colors/font_color = Color(0.306, 0.886, 0.961, 1)
+
+[node name="Hint" type="Label" parent="UILayer/DesignerHUD/ControlsPanel/Scroll/ControlsList"]
+layout_mode = 2
+text = "F1 or ESC to close"
+theme_override_font_sizes/font_size = 11
+theme_override_colors/font_color = Color(0.604, 0.651, 0.761, 0.6)
+
+[node name="Toolbar" type="HBoxContainer" parent="UILayer"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_top = 4.0
+offset_bottom = 44.0
+theme_override_constants/separation = 8
+
+[node name="BackBtn" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "← BACK"
+theme_override_font_sizes/font_size = 13
+
+[node name="Sep1" type="VSeparator" parent="UILayer/Toolbar"]
+layout_mode = 2
+
+[node name="ModeFP" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "FIRST PERSON"
+theme_override_font_sizes/font_size = 12
+
+[node name="ModeTP" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "THIRD PERSON"
+theme_override_font_sizes/font_size = 12
+
+[node name="ModePreview" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "PREVIEW ANIMS"
+theme_override_font_sizes/font_size = 12
+
+[node name="Sep2" type="VSeparator" parent="UILayer/Toolbar"]
+layout_mode = 2
+
+[node name="TeamBlue" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "BLUE"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(0.169, 0.424, 1, 1)
+
+[node name="TeamRed" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "RED"
+theme_override_font_sizes/font_size = 12
+theme_override_colors/font_color = Color(1, 0.294, 0.341, 1)
+
+[node name="Sep3" type="VSeparator" parent="UILayer/Toolbar"]
+layout_mode = 2
+
+[node name="SpecialBtn" type="Button" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "✷ HOLD: SPECIAL"
+theme_override_font_sizes/font_size = 12
+
+[node name="Spacer" type="Control" parent="UILayer/Toolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ClipRow" type="HBoxContainer" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+visible = false
+theme_override_constants/separation = 4
+
+[node name="ClipPrev" type="Button" parent="UILayer/Toolbar/ClipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "◀"
+theme_override_font_sizes/font_size = 14
+
+[node name="ClipSelect" type="OptionButton" parent="UILayer/Toolbar/ClipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(200, 0)
+theme_override_font_sizes/font_size = 12
+
+[node name="ClipNext" type="Button" parent="UILayer/Toolbar/ClipRow"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "▶"
+theme_override_font_sizes/font_size = 14
+
+[node name="HintLabel" type="Label" parent="UILayer"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -250.0
+offset_top = -24.0
+offset_right = 250.0
+grow_horizontal = 2
+grow_vertical = 0
+text = "WASD move · SHIFT walk · C crouch · SPACE jump · click view to look · ESC frees cursor · F1 controls"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 11
+theme_override_colors/font_color = Color(1, 1, 1, 0.4)
