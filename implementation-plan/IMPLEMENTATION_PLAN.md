@@ -31,6 +31,18 @@ The architecture plan predates these. All are carried through this document:
 4. **Native desktop client — Windows, Linux, macOS.** Not web, not mobile. This
    settles the transport (§13: ENet, not QUIC) and removes the touch control
    scheme from scope (§3.5).
+5. **ENet is the realtime transport.** QUIC was considered and rejected for V1
+   (§13); Godot ships ENet natively and it matches the FPS traffic model.
+6. **The Game API enables what the web game already enables — nothing more for
+   V1.** Today lobby operations are `listRooms` and `join` over WebSocket on the
+   same process as simulation (`server.js`); HTTP serves static files only. The Go
+   API is that lobby surface moved to HTTPS, with gameplay on a separate ENet
+   connection. It is not a scheduler, matchmaker, or simulation proxy.
+7. **Capacity is a peer budget on the Game Server.** One ENet host holds all
+   clients (default cap **2048** peers; Godot allows up to 4095). Lobbies are
+   partitions inside that pool — `max_lobbies`, `max_players`, and
+   `max_spectators` are policy knobs that must fit under the global peer limit
+   (§9.3, §10).
 
 ---
 
@@ -55,6 +67,19 @@ game server (`server.js:30`, `server.js:68`). It holds a `Map` of `Room`
 objects; each `Room` owns players, bots, score, round state and a map reference.
 Clients connect over a single WebSocket carrying JSON, and every message is a
 flat `{t: '...'}` object.
+
+**Lobby surface today (this is the Game API scope).** HTTP serves static assets
+only. All create/list/join traffic is WebSocket messages on the same socket as
+gameplay:
+
+- `listRooms` → `{ t: 'rooms', rooms: roomList(), dev: DEV_MODE }` (`server.js:1447`, `roomList()` at `server.js:1407`)
+- `join` with `create: true` → spawn a `Room`, apply create settings (`applyCreateSettings`, `server.js:1378`)
+- `join` to an existing name → land in the stands; `joinError` if full or gone (`server.js:1451`)
+
+There is no separate orchestrator process — the game server *is* the lobby
+authority. The rebuild splits **lobby** (Go HTTPS) from **gameplay** (ENet) for
+a native client, but V1 feature parity is this message set, not a new control
+plane product.
 
 **Client→server:** `join`, `state`, `shot`, `melee`, `specialStart`,
 `specialFire`, `setTeam`, `teamMenu`, `chat`, `ping`, `listRooms`, `leave`.
@@ -433,7 +458,7 @@ ion-strikers-game/
   shared/
     game-core/                # pure C++: movement, hitbox, rules, map data
     protocol/                 # versioned wire schema + generated codecs
-    networking/               # QUIC transport abstraction
+    networking/               # ENet transport abstraction (thin interface)
   content/
     maps/                     # *.data.js -> canonical map data (see §2.3)
     tools/                    # extract-fp-arms, animation bake, map editor
@@ -519,20 +544,110 @@ that property; it is also what lets the whole rules layer be tested headlessly.
 
 Module `ionstrikers.com/api`, `cmd/gameapi` as the only binary.
 
-- `internal/serverreg` — Game Server registration, heartbeat, capacity, build and
-  protocol version, TTL eviction.
-- `internal/discovery` — the joinable-lobby list. Direct successor of today's
-  `roomList()` (`server.js`), which already returns name, players, humans, max,
-  spectators, capacity, round, score, mode, map, and `botsShoot`.
-- `internal/lobby` — create/join orchestration against the Game Server's
-  management API.
-- `internal/auth` — short-lived join credentials.
-- `internal/httpapi` — HTTP handlers, versioning, rate limits. **JSON over
-  HTTPS** (§15.1); the API never speaks the binary game protocol.
-- `internal/config` — typed config; **no globals**.
+**Scope guard.** V1 endpoints must correspond to something the web game already
+does via `listRooms` / `join`. No ranked matchmaking, MMR, party queues,
+multi-server scheduler, or gameplay proxying. If a proposed endpoint does not map
+to today's lobby WebSocket messages, it is out of scope.
 
-The API never sees a game packet. Server selection in V1 is "the one configured
-managed server" behind an interface that a scheduler can implement later.
+### 9.1 Player-facing API — web parity over HTTPS
+
+| Web today (`server.js`) | Go Game API (V1) |
+|---|---|
+| `listRooms` → `roomList()` | `GET /v1/games` — same fields (name, players, humans, max, spectators, capacity, round, score, mode, map, `botsShoot`; include `dev` flag when server is in dev mode) |
+| `join` + `create: true` + settings | `POST /v1/games` — mode, map, rounds/kill target, player slots, spectator slots, bots, optional display name, dev-only `botsShoot` |
+| `join` to existing room | `POST /v1/games/{id}/join` |
+| `joinError` (full / gone) | HTTP 4xx with reason string |
+| implicit: same host for lobby + game | response includes `{ host, port, game_id, join_token }`; client opens a **separate ENet** connection for gameplay |
+
+**Adds over the web version (native client needs, not new product features):**
+
+- short-lived **join tokens** (web trusted "connect then join"; desktop benefits from API-minted credentials)
+- **build / protocol version** gate on create and join
+
+JSON over HTTPS (§15.1). The API never speaks the binary game protocol and never
+proxies ticks.
+
+Package layout:
+
+- `internal/httpapi` — public handlers, versioning, rate limits
+- `internal/discovery` — cached joinable-lobby list (successor of `roomList()`)
+- `internal/lobby` — create/join; forwards to the Game Server management surface
+- `internal/auth` — join-token minting and validation helpers
+- `internal/serverreg` — registration, heartbeat ingestion, TTL eviction (V1:
+  one configured managed server; interface ready for a second server later)
+- `internal/config` — typed config; **no globals**
+
+The API may pre-check capacity before calling the server, but the **Game Server
+is always authoritative** — same as today, where the server sends `joinError`
+even if the menu thought a slot existed.
+
+### 9.2 Internal management API — lobby plumbing only
+
+Splitting lobby (Go) from simulation (Godot) requires a **private** Game API ↔
+Game Server wire. This is not new player-facing surface; it mirrors what
+`server.js` already does in-process when handling `listRooms` / `join`.
+
+Transport: JSON over HTTPS on a **private bind** (or JSON-lines over
+`TCPServer` in the GDExtension — Godot has no built-in HTTP server; implement
+in `native/src/server/`). Authenticate with a shared secret or mTLS; never
+expose on the public player path.
+
+Minimal operations (V1):
+
+| Operation | Purpose |
+|---|---|
+| `register` | Game Server announces itself at startup (endpoint, build, protocol version, capacity limits) |
+| `heartbeat` | Push lobby snapshot + peer counts on an interval (replaces live `roomList()` from the same process) |
+| `create_game` | `GameRegistry.create()` — same as `join` + `create: true` |
+| `join_game` | Validate slot, mint join token — same as successful `join` before gameplay messages |
+| `destroy_game` | Remove empty/expired lobby — successor of `EMPTY_ROOM_TTL` (`server.js:112`) |
+
+Discovery sync: **push + cache**. The server heartbeats lobby metadata; the API
+serves `GET /v1/games` from cache and evicts stale entries when heartbeats stop.
+No distributed scheduler in V1.
+
+### 9.3 Capacity — peer budget first, lobbies second
+
+In reality the **Game Server is the orchestrator**: one process, one ENet host,
+all humans are peers on the same UDP port. Lobbies are bookkeeping partitions,
+not separate connections or ports.
+
+```
+GameServer
+├── ENet host          max_peers = 2048 (configurable; Godot allows up to 4095)
+├── GameRegistry       max_lobbies = 20 (managed policy; 1 for dedicated 1/1)
+└── GameInstance × N   each: max_players (2–16) + max_spectators (1–24) at create time
+```
+
+**Hard ceiling:** `active_peers ≤ max_peers`. Every connected client — including
+peers still authenticating — consumes one slot.
+
+**Policy knobs** (unchanged from web create settings):
+
+- `max_lobbies` — how many `GameInstance`s may exist at once (20 managed V1 target)
+- per-lobby `max_players` / `max_spectators` — chosen at create; bounded by
+  `HARD_MAX_PLAYERS` (16) and `HARD_MAX_SPECTATORS` (24) from `server.js:105`
+
+**Sizing check** (worst case, every lobby full):
+
+```
+20 lobbies × (16 players + 24 spectators) = 800 peers ≪ 2048 default cap
+```
+
+Simulation tick cost will bite before the peer table does at these numbers. Raise
+`max_lobbies` or per-lobby caps only after soak tests, not by arithmetic alone.
+
+**Enforcement order** (all on the Game Server):
+
+1. `ENetConnection.refuse_new_connections(true)` when `active_peers ≥ max_peers`
+2. `GameRegistry.create()` fails when `active_lobbies ≥ max_lobbies`
+3. `GameInstance.admit()` fails when stands/teams full (today's `joinError`)
+
+The Go API mirrors (2) and (3) for fast failures but must not be the only enforcement.
+
+Server selection in V1 is "the one configured managed Game Server" behind an
+interface a future scheduler can implement — without changing gameplay code under
+`GameInstance`.
 
 ---
 
@@ -542,14 +657,28 @@ managed server" behind an interface that a scheduler can implement later.
 
 | | Managed | Dedicated |
 |---|---|---|
-| `capacity` | 20 | 1 |
+| `max_peers` | 2048 (default global ENet cap) | same |
+| `max_lobbies` | 20 | 1 |
 | `preload` | none | one `GameInstance` at boot |
-| `allow_dynamic_create` | yes (via management API) | no |
-| Registration | required | optional |
+| `allow_dynamic_create` | yes (via management API / `POST /v1/games`) | no |
+| Registration with Game API | required | optional |
 
-Everything below `GameRegistry` is identical. Dedicated is `capacity=1` +
+Everything below `GameRegistry` is identical. Dedicated is `max_lobbies=1` +
 `preload` — not a second code path. Note the plan's own clarification: 1/1 means
 *one lobby*, which still holds 8/12/16 players.
+
+**Port budget** (managed or dedicated):
+
+| Port | Protocol | Who connects |
+|---|---|---|
+| Public HTTPS | TCP/TLS | Clients → Game API |
+| Gameplay | UDP (+ optional DTLS) | Clients → Game Server — **one port, all lobbies** |
+| Management | TCP/TLS (private bind) | Game API → Game Server only |
+
+Extra gameplay UDP ports are acceptable (e.g. one port per lobby via multiple
+`ENetConnection` hosts) but **not** the V1 design — one host with peer→lobby
+routing is preferred. Opening several UDP ports is operationally fine for
+dedicated (1 lobby → 1 port is natural); multi-lobby managed should stay on one.
 
 ---
 
@@ -557,9 +686,9 @@ Everything below `GameRegistry` is identical. Dedicated is `capacity=1` +
 
 ```
 Process
-└── GameServer            config, logging, metrics, identity, QUIC transport
-    └── GameRegistry      id → GameInstance, capacity accounting
-        └── GameInstance  lobby metadata, connections, mode, map, participants
+└── GameServer            config, logging, metrics, identity, ENet transport
+    └── GameRegistry      id → GameInstance, lobby count accounting
+        └── GameInstance  lobby metadata, connected peers, mode, map, participants
             └── Match     match score, limits, match timers
                 └── Round  (Classic only) round score, spawns, round timers
                     └── Pawn   position, health, per-life state
@@ -583,22 +712,43 @@ Rules that make §5 impossible by construction:
 
 ## 12. Create and join
 
-**Create:** client → `POST /v1/games` → API checks the configured server's
-capacity → server `GameRegistry.create()` → API returns `{game_id, endpoint,
-join_token}` → client connects over QUIC and presents the token.
+### 12.1 Web → new mapping
 
-**Join:** client → `GET /v1/games` → list → `POST /v1/games/{id}/join` → API
-validates availability and returns endpoint + token → QUIC.
+**List:** client → `GET /v1/games` → Game API (cached from server heartbeats) —
+equivalent to `listRooms` / `roomList()`.
+
+**Create:** client → `POST /v1/games` → API → server `create_game` →
+`GameRegistry.create()` → `{ game_id, host, port, join_token }` → client
+**ENet connect** → reliable handshake presents token → peer bound to
+`GameInstance`.
+
+**Join:** client → `POST /v1/games/{id}/join` → API → server validates slot →
+same endpoint response → ENet connect + token handshake.
 
 Create options stay small, matching today's create screen
 (`public/index.html:365`+): mode, map, rounds *or* kill target,
 player slots, spectator slots, bots on/off, optional server name — plus the
-dev-mode-only "bots shoot back" toggle.
+dev-mode-only "bots shoot back" toggle (gated on server `DEV_MODE`, as today).
+
+### 12.2 Connection lifecycle
+
+ENet has no lobby concept. Every player is one peer on the shared host; lobby
+membership is application state:
+
+```
+1. Client ENet connect to host:port (same endpoint for all lobbies)
+2. Server: EVENT_CONNECT → ConnectionSession state = Authenticating
+3. Client → server: JoinAuth { token } on reliable channel 1
+4. Server validates token, sets session.game_instance, state = InLobby
+5. All gameplay packets: router resolves peer → GameInstance (structural isolation)
+6. Disconnect: session destroyed; instance drops participant when appropriate
+```
 
 **Preserved joining rule.** Today *every* arrival lands in the stands and picks a
 side explicitly, and the team menu greys out illegal choices with the reason
 (`teamOptions()`, `server.js`). It is good design — an explicit choice that always
-passes the balance check — and should be kept.
+passes the balance check — and should be kept. Token auth replaces "anyone who
+can open the WebSocket may join" for native clients; stands-first flow is unchanged.
 
 ---
 
@@ -636,29 +786,33 @@ needs:
 
 | Method | Use |
 |---|---|
-| `create_host_bound(bind_ip, port, max_peers, max_channels, …)` | **one** host on **one** UDP port |
+| `create_host_bound(bind_ip, port, max_peers, max_channels, …)` | **one** host on **one** UDP port; set `max_peers` to the global cap (default **2048**, §9.3) |
 | `service(timeout)` | pump connect / receive / disconnect on the server tick |
 | `get_peers()` | every connected `ENetPacketPeer` |
 | `channel_limit()` | the lanes in §14 |
-| `refuse_new_connections()` | capacity enforcement at the transport edge |
+| `refuse_new_connections()` | reject new peers at global capacity |
 | `bandwidth_limit()`, `compress()` | throttling, and ENet's built-in range coder |
-| `dtls_server_setup()` | **DTLS encryption** — one of QUIC's real advantages, natively |
+| `dtls_server_setup()` | optional DTLS encryption |
 
-**The design.** One `ENetConnection` host owned by the `GameServer`. A peer binds
-to exactly one `GameInstance` when its join token validates, and the router
-resolves peer → instance on every received packet. Lobbies are isolated by
-**ownership, not by socket** — which turns §22's rule ("a connection resolves to
-exactly one `game_id`") into the only thing the code can express, rather than an
-invariant somebody has to maintain.
+**The design.** One `ENetConnection` host owned by the `GameServer`. Each
+connected human is one peer. A peer binds to exactly one `GameInstance` when its
+join token validates; the router resolves peer → instance on every received
+packet. Lobbies are isolated by **ownership, not by socket** — which turns §22's
+rule ("a connection resolves to exactly one `game_id`") into the only thing the
+code can express, rather than an invariant somebody has to maintain.
+
+ENet does not enforce one lobby per host. It knows only "N peers on this host."
+Lobby limits (`max_lobbies`, per-lobby player/spectator caps) are enforced in
+`GameRegistry` / `GameInstance` above the transport.
 
 **Rejected: `ENetMultiplayerPeer` with one `MultiplayerAPI` per lobby.** Godot
 supports scoping a `MultiplayerAPI` to a scene subtree
 (`SceneTree.set_multiplayer(api, root_path)`; nesting disallowed, siblings fine),
-so it would work. Two reasons not to: `create_server(port, …)` **binds a port per
-peer**, so 20 lobbies means 20 UDP ports to allocate, firewall and advertise; and
-it pulls in the high-level RPC and `MultiplayerSynchronizer` replication, which
-couple gameplay to the scene tree and undercut §11 — the model this rebuild
-exists to get right.
+so it would work. Two reasons not to for V1: it pulls in the high-level RPC and
+`MultiplayerSynchronizer` replication, which couple gameplay to the scene tree
+and undercut §11; and `create_server(port, …)` binds **one port per
+MultiplayerPeer**, which is acceptable operationally (especially dedicated 1/1)
+but unnecessary when one host + routing suffices for managed multi-lobby.
 
 ### 13.3 Rejected alternatives
 
@@ -686,9 +840,10 @@ question is not reopened from memory later.
 
 ### 13.4 Downstream
 
-`shared/networking/` is a thin transport interface with **one** implementation.
-The interface stays because it costs nothing and is the seam both the WebRTC and
-QUIC analyses above assumed — not speculative generality.
+`shared/networking/` is a thin transport interface with **one** ENet
+implementation. The interface stays because it costs nothing and preserves a seam
+if a second transport (e.g. WebRTC for a future web client) is ever needed — not
+speculative generality for V1.
 
 ---
 
@@ -720,18 +875,17 @@ That is adopted, and it removes a dependency the earlier draft carried.
 
 ### 15.1 Game API — JSON over HTTPS
 
-Plain JSON request/response. It is a control plane: a handful of calls per player
-per session, human-readable in a log or a `curl`, trivially versioned by URL
-(`/v1/…`), and readable by any tool without a schema compiler. There is no
-argument for binary here — the traffic is negligible and debuggability outranks
-bytes at this boundary.
+Plain JSON request/response. Scope is §9.1: list/create/join parity with today's
+`listRooms` / `join` WebSocket messages. Human-readable in logs and `curl`,
+versioned by URL (`/v1/…`). No argument for binary here — traffic is negligible
+and debuggability outranks bytes at this boundary.
 
 ### 15.2 Game Server — one binary framing, two lanes
 
-Framing differs between the two QUIC primitives, because QUIC already solves
-part of it:
+Framing differs between reliable and unreliable delivery:
 
-**Reliable streams** are a byte pipe, so they need explicit framing:
+**Reliable packets** (ENet channel with `FLAG_RELIABLE`) need explicit framing —
+the receiver must delimit messages on a byte stream:
 
 ```
 u16  size        payload bytes that follow
@@ -740,9 +894,8 @@ u8   flags
 ...  payload
 ```
 
-**Unreliable packets** are already length-delimited by the transport — true of
-both ENet packets and QUIC datagrams — so a size field would be dead weight on
-the highest-frequency traffic in the game. Omitted deliberately:
+**Unreliable packets** are already length-delimited by ENet — a size field would
+be dead weight on the highest-frequency traffic. Omitted deliberately:
 
 ```
 u8   type
@@ -752,9 +905,8 @@ u32  tick        simulation tick this refers to
 ...  payload
 ```
 
-**Protocol version is negotiated once** in the handshake on the control stream,
-not repeated per message. It cannot change mid-connection, and two bytes at
-30 Hz across every client is real bandwidth spent on a constant.
+**Protocol version is negotiated once** in the join handshake on reliable channel 1,
+not repeated per message.
 
 ### 15.3 Payload encoding — fixed layout, quantised
 
@@ -871,7 +1023,7 @@ blocking simulation. Exposes `last_persisted_at`, `last_persisted_version`, writ
 latency, failures and queue depth. A persistence failure is loud in metrics and
 does not kill a healthy match.
 
-Explicitly **not** persisted: per-tick transforms, QUIC connection objects,
+Explicitly **not** persisted: per-tick transforms, ENet peer/session handles,
 `Node` references, input packets.
 
 ---
@@ -891,9 +1043,9 @@ consumes it in V1 beyond tests that read it back.
   `participant_id`, `tick` on every gameplay line.
 - **State transitions** log previous, next, reason, ids, tick. Invalid
   transitions fail loudly rather than silently mutating a boolean.
-- **Metrics:** capacity (max/active/free/players), tick duration histogram,
-  datagrams sent/received/dropped, RTT and loss per connection, stream
-  backpressure, persistence latency/failures.
+- **Metrics:** global peers (active/max/refused), lobbies (active/max), players per
+  lobby, tick duration histogram, datagrams sent/received/dropped, RTT and loss
+  per connection, persistence latency/failures.
 - **A logical state dump** for `GameServer`/`GameRegistry`/`GameInstance` —
   active games, participants, pawns, timers, match/round state, replication
   state, current ticks. Dev-mode only, on the management surface, never on the
@@ -918,11 +1070,12 @@ browser with real input. The equivalents:
 | Protocol | Encode/decode, truncation, corruption, bad type, oversize, stale sequence, incompatible version. |
 | Lifecycle | Create/destroy matches and rounds repeatedly; assert owned state is *gone*, not reset. |
 | Cross-lobby isolation | Concurrent `GameInstance`s; prove ids and state cannot cross. |
-| Capacity | Create 20, reject the 21st, destroy at random, reuse freed slots immediately. |
+| Capacity | Global peer cap (2048 default): refuse at limit; 21st lobby rejected;
+  per-lobby full → join error; destroy lobbies at random, reuse slots |
 | Dedicated soak | Thousands of matches in one preloaded 1/1 instance; assert flat memory and no accumulation. |
 | Network conditions | Latency, jitter, loss, reordering, duplication against reconciliation. |
 | Persistence | Delayed writes, coalescing, stale versions, failures without stalling. |
-| Integration | API → create → discover → join → QUIC → play → end → cleanup. |
+| Integration | API → create → discover → join → ENet → play → end → cleanup |
 
 Two lessons from today's work on the existing suite, worth carrying: a test that
 waits *n* seconds for an emergent event needs a window justified by measurement
@@ -934,9 +1087,8 @@ leaks a resource silently starves its own later sections.
 
 ## 21. CI, build, pinning
 
-- Pin: Godot version, godot-cpp tag, `api_version`, msquic tag, FlatBuffers
-  version, Go toolchain, SCons. CI **asserts** the pins rather than resolving
-  latest.
+- Pin: Godot version, godot-cpp tag, `api_version`, Go toolchain, SCons. CI
+  **asserts** the pins rather than resolving latest.
 - Jobs: C++ unit + protocol tests (no engine), Go build/vet/test, GDExtension
   build for Linux/Windows/macOS, headless server smoke, integration, nightly
   soak.
@@ -956,10 +1108,9 @@ leaks a resource silently starves its own later sections.
 - Rate-limit per connection; one malformed client must not destabilise a
   multi-lobby process.
 - A connection resolves to exactly one `game_id`; a packet can never mutate
-  another `GameInstance`. With the §13.3 routing this is structural: the router
+  another `GameInstance`. With the §13.2 routing this is structural: the router
   maps peer → instance, and a packet has no field that could name a different one.
-- Transport encryption via `ENetConnection.dtls_server_setup()` (DTLS), so
-  dropping QUIC does not mean dropping encryption.
+- Transport encryption via `ENetConnection.dtls_server_setup()` (optional DTLS).
 - Management and debug surfaces off the public path.
 - Keep the existing chat discipline: 50-char cap, control/bidi codepoints
   stripped server-side, token-bucket rate limit, and **rendered as text, never
@@ -995,9 +1146,10 @@ leaks a resource silently starves its own later sections.
 7. **Two codecs from one schema (§15.5)** need a generator; writing it is a
    small task but it is a task, and it belongs in Milestone 0 rather than being
    discovered in Milestone 5.
-8. **20 lobbies in one process** is untested for this workload; the capacity
-   number should be treated as a target to be validated by the soak test, not a
-   guarantee.
+8. **Multi-lobby load at scale** is untested for this workload. Default caps
+   (`max_peers=2048`, `max_lobbies=20`, 16+24 per lobby → 800 peers worst case)
+   should be validated by soak tests (tick time, memory), not treated as guarantees.
+   Raise limits only after measurement.
 9. **Distribution and updates — the cost of going native.** A browser game
    updates by reloading; a desktop build does not. Players need a way to get it
    (direct download, itch.io, Steam) and a way to stay in step with the server,
@@ -1012,12 +1164,12 @@ leaks a resource silently starves its own later sections.
 
 | # | Milestone | Acceptance |
 |---|---|---|
-| 0 | Research + ADRs | Target platforms fixed (Windows, Linux, macOS desktop); §7/§13/§15 decisions recorded with rejected alternatives; §23 items 1, 2, 5 and 9 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
+| 0 | Research + ADRs | Target platforms fixed (Windows, Linux, macOS desktop); §7/§9/§13/§15 decisions recorded with rejected alternatives; §23 items 1, 2, 5 and 9 resolved; the message schema and its C++/test-client generator (§15.5) exist and round-trip. |
 | 1 | Repo bootstrap | Fresh clone builds the GDExtension and opens both Godot projects with pinned stable tools on all three platforms. |
 | 2 | `game-core` + lifecycle | Movement, hitbox and rules ported; unit tests pass with no engine. Lifecycle tests show owned state destroyed, not reset. Invalid transitions fail loudly. |
-| 3 | Headless server skeleton | Same binary runs managed 0..20 and dedicated 1/1. Capacity reported; 21st create rejected. |
-| 4 | Game API | Register, heartbeat, create, list, join, TTL eviction, version gating. A CLI can create and discover a lobby. |
-| 5 | Transport | One `ENetConnection` host on one port; handshake, auth, reliable + unreliable lanes on channels, peer→instance routing. Two clients in *different* lobbies on the *same* port reach the correct instance; cross-lobby leakage test passes. |
+| 3 | Headless server skeleton | Same binary runs managed (max 20 lobbies) and dedicated 1/1. `max_peers` configured (default 2048); global peer cap and lobby cap reported; 21st lobby create rejected. |
+| 4 | Game API | Web-parity list/create/join (§9.1); server register + heartbeat; internal management wire (§9.2); TTL eviction; version gating. A CLI can list, create, and join. |
+| 5 | Transport | One `ENetConnection` host, `max_peers` set; handshake + token auth; reliable + unreliable lanes; peer→instance routing. Two clients in *different* lobbies on the *same* port reach the correct instance; cross-lobby leakage test passes. |
 | 6 | Client skeleton + UI port | Callsign, menu, join, create, settings screens with the §3.3 theme; exclusive screen manager with the ui.test contract re-expressed. |
 | 7 | First playable | Spawn, move, fire, authoritative hit/death/respawn/score, Classic + DM minimum rules. Two clients complete a match; all match state destroyed after. |
 | 8 | Prediction and feel | Input replay reconciliation; movement indistinguishable from the live build at 0 ms and acceptable at 100 ms. Side-by-side comparison against the live build is the acceptance test. |
