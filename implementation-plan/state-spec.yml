@@ -1,0 +1,536 @@
+# Ion Strikers — State specification
+# Derived from implementation-plan/IMPLEMENTATION_PLAN.md (§5, §9–§12, §17)
+# and plan/ARCHITECTURE_PLAN.md (§5–§6).
+#
+# Authoritative simulation lives on the Game Server. The client predicts and
+# presents. The Go Game API is optional at runtime (online browse only).
+
+version: 3
+status: draft
+
+layers:
+  client:
+    role: presentation, input, prediction, interpolation, effects
+    transports:
+      https: Game API — optional; online browse/create/join only
+      enet: Game Server — required for all gameplay sessions
+    session_modes:
+      online_browse:
+        game_api: required
+        description: Join/Create via GET/POST /v1/games; ENet + JoinAuth token
+      direct_connect:
+        game_api: none
+        description: User supplies host:port; ENet + JoinDirect { name } — no game_id on dedicated
+      local_new_game:
+        game_api: none
+        description: Client spawns IonStrikersServer child; ENet 127.0.0.1 + JoinDirect { name }
+      dedicated_in_browser:
+        game_api: optional
+        description: Dedicated server registers; GET /v1/games returns one row; join via token (Path A) or direct
+    not_authoritative_for:
+      - hits
+      - kills
+      - score
+      - spawn_legality
+      - match_outcome
+
+  game_api:
+    role: cached lobby list, create/join, join tokens, version gate
+    optional_at_runtime: true
+    required_for:
+      - public server browser (game.ionstrikers.com)
+    optional_listing_for:
+      - internet dedicated servers (register + heartbeat → exactly one CachedGame row)
+    not_required_for:
+      - direct_connect
+      - local_new_game
+      - lan_dedicated
+    not_authoritative_for:
+      - simulation
+      - realtime_packets
+    v1_scope: web parity — listRooms / join over HTTPS (see IMPLEMENTATION_PLAN §9.1)
+
+  game_server:
+    role: authoritative sim, rules, one ENet host, many lobbies
+    capacity:
+      max_peers_default: 2048
+      max_peers_godot_limit: 4095
+      max_lobbies_managed: 20
+      max_lobbies_dedicated: 1
+      per_lobby_max_players: 16
+      per_lobby_max_spectators: 24
+
+topology_ascii: |
+  SESSION A — Online browse (Game API required)
+  Client ──HTTPS──► Game API ──mgmt──► Game Server
+  Client ──ENet────► Game Server          JoinAuth { token }
+
+  SESSION B — Direct connect / New Game (no Game API)
+  Client ──ENet────► Game Server          JoinDirect { name }  (no game_id on dedicated)
+
+  SESSION C — Dedicated listed in browser (API optional)
+  Client ──HTTPS──► Game API ──► one CachedGame row for preloaded lobby
+  Client ──ENet────► Game Server          JoinAuth { token }  OR  JoinDirect { name }
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  CLIENT (Godot + C++)                                                   │
+  │  • HTTPS → Game API (online browse only)                                │
+  │  • ENet   → Game Server (all sessions)                                  │
+  └─────────────────────────────────────────────────────────────────────────┘
+           │ HTTPS (optional)                 │ ENet (1 peer = 1 human)
+           ▼                                  ▼
+  ┌──────────────────────┐          ┌────────────────────────────────────────┐
+  │  GAME API (Go)       │  mgmt    │  GAME SERVER (Godot headless + C++)  │
+  │  • cached lobby list │◄────────►│  • authoritative sim + rules         │
+  └──────────────────────┘          └────────────────────────────────────────┘
+
+game_server:
+  GameServer:
+    lifetime: process
+    owns:
+      - server_id
+      - config
+      - metrics
+      - logging
+      - ENetHost
+      - ConnectionSession_index
+      - GameRegistry
+    must_not_own:
+      - current_score
+      - round_state
+      - lobby_players
+
+    config:
+      max_peers: 2048
+      max_lobbies: 20
+      hosting_policy: managed | dedicated | local_dedicated
+      allow_direct_join: bool
+      register_with_game_api: bool
+      dev_mode: bool
+    hosting_policy_notes:
+      managed: allow_direct_join=false; token required; API registration required
+      dedicated: allow_direct_join=true; API registration optional; one preloaded lobby; JoinDirect omits game_id
+      local_dedicated: allow_direct_join=true; spawned by client; no API; preload 1 lobby; JoinDirect omits game_id
+
+    ENetHost:
+      lifetime: process
+      owns:
+        - bind_ip
+        - bind_port
+        - active_peer_count
+        - refuse_new_connections
+      notes: one UDP port; all lobbies share this host
+
+    ConnectionSession:
+      lifetime: while ENet peer connected
+      one_per: ENetPacketPeer
+      owns:
+        - enet_peer
+        - state
+        - join_token_id
+        - game_instance_id
+        - participant_id
+        - last_processed_input_seq
+      states:
+        - Authenticating
+        - InLobby
+        - Disconnecting
+      routing: every inbound packet resolves peer → ConnectionSession → GameInstance
+
+    GameRegistry:
+      lifetime: process
+      owns:
+        - active_lobby_count
+        - max_lobbies
+        - GameInstance_map_by_game_id
+      methods:
+        resolve_join_direct:
+          description: pick GameInstance for Path B JoinDirect
+          rules:
+            - if max_lobbies == 1 and exactly one active GameInstance → use it (implicit dedicated lobby)
+            - else if game_id present and valid → use that instance
+            - else → JoinError
+
+    GameInstance:
+      lifetime: lobby
+      states:
+        - Creating
+        - WaitingForPlayers
+        - Active
+        - Ending
+        - Destroying
+        - Destroyed
+      owns:
+        lobby_metadata:
+          game_id: uuid
+          display_name: string
+          mode: classic | deathmatch
+          map_id: string
+          max_players: 2-16
+          max_spectators: 1-24
+          rules:
+            win_rounds: int
+            kill_target: int
+            bots: bool
+            bots_shoot: bool
+          notes: immutable for joiners after create
+        sessions: ConnectionSession[]
+        participants: Participant[]
+        Match: Match | null
+      must_not_own:
+        - other_lobbies_state
+
+      Participant:
+        lifetime: match
+        owns:
+          - participant_id
+          - display_name
+          - team: null | red | blue | spec
+          - kills
+          - deaths
+          - streak
+          - is_bot
+          - connection_session
+        notes: |
+          Survives pawn death and trip to stands (§5.4).
+          team=null means in stands (web parity).
+
+      Match:
+        lifetime: match
+        destroyed_on: match_end
+        states:
+          - MatchStarting
+          - MatchEnding
+        owns:
+          - match_id
+          - score: { red, blue }
+          - match_timers
+          - Pawn[]
+          - Round[]
+        notes: no resetMatch(); destroy and allocate new Match
+
+        Round:
+          lifetime: round
+          classic_only: true
+          deathmatch: skipped
+          states:
+            - RoundStarting
+            - RoundLive
+            - RoundEnding
+          owns:
+            - round_id
+            - round_num
+            - round_score
+            - round_timers
+
+        Pawn:
+          lifetime: one life
+          owns:
+            - pawn_id
+            - participant_id
+            - position
+            - velocity
+            - yaw
+            - pitch
+            - health
+            - alive
+            - spawn_protection
+            - crouched
+            - special_charge_state
+          notes: respawn or team change destroys old Pawn, creates new Pawn
+
+client:
+  ClientApp:
+    lifetime: app
+    phases:
+      - Boot
+      - Menu
+      - Connecting
+      - InMatch
+      - MatchOver
+
+    session_mode: online_browse | direct_connect | local_new_game | dedicated_in_browser
+
+    LobbyClient:
+      transport: HTTPS
+      used_when: session_mode in [online_browse, dedicated_in_browser]
+      owns:
+        - cached_games[]
+        - pending_join: { host, port, game_id, join_token }
+        - build_version
+        - protocol_version
+
+    LocalDedicatedLauncher:
+      used_when: session_mode == local_new_game
+      owns:
+        - child_process: IonStrikersServer
+        - chosen_port
+        - spawn_config: { map, mode, bots, … }
+        - lifecycle: spawn on New Game, kill on client exit
+      notes: CS-style; not a listen server — separate headless process
+
+    NetClient:
+      transport: ENet
+      owns:
+        - enet_peer
+        - connection_phase: Disconnected | Connecting | Authenticating | InLobby
+        - join_path: token | direct
+        - target: { host, port }
+        - rtt
+        - packet_loss
+        - outbound_input_queue
+
+    LocalPlayerView:
+      owns:
+        - predicted_pawn
+        - camera
+        - last_server_snapshot_tick
+        - pending_inputs[]
+        - reconciliation_state
+
+    RemotePlayerViews:
+      keyed_by: participant_id
+      owns:
+        - interpolated_transform
+        - derived_animation_state
+
+    MatchPresentation:
+      mirror_only: true
+      owns:
+        - game_id
+        - mode
+        - map_id
+        - score
+        - round_num
+        - kill_feed
+        - team_menu_state
+        - hud_ui_state
+
+    rules:
+      - no mutable gameplay autoloads
+      - lobby/match reachable only through explicit handles
+
+game_api:
+  GameApiProcess:
+    ServerRegistry:
+      ManagedServer:
+        keyed_by: server_id
+        v1_count: 1
+        owns:
+          - endpoint
+          - max_peers
+          - max_lobbies
+          - last_heartbeat_at
+          - cached_games[]
+
+    CachedGame:
+      mirror_only: true
+      fields:
+        - game_id
+        - display_name
+        - mode
+        - map_id
+        - players
+        - spectators
+        - capacity
+        - score
+        - round
+        - lifecycle_state
+      dedicated_note: when server is dedicated, heartbeat pushes exactly one row (preloaded lobby)
+      must_not_include:
+        - pawn_positions
+        - enet_peers
+        - input_history
+
+identity_chain:
+  description: how a packet finds its lobby and player
+  chain:
+    - ENetPacketPeer
+    - ConnectionSession
+    - GameInstance
+    - Participant
+    - Pawn
+  routing_rule: |
+    recv(peer) → ConnectionSession → game_instance_id → GameInstance
+    Packets do not carry a free-floating game_id for routing after auth.
+
+connection_binding_ascii: |
+  Game Server ENetHost :7777
+  ┌──────────────────────────────────────┐
+  │ ConnectionSession A (Alice)          │
+  │   enet_peer → game_id: arena-1       │
+  │               participant_id: 3      │
+  ├──────────────────────────────────────┤
+  │ ConnectionSession B (Bob)            │
+  │   enet_peer → game_id: arena-1       │  same lobby
+  │               participant_id: 7      │
+  ├──────────────────────────────────────┤
+  │ ConnectionSession C (Carol)          │
+  │   enet_peer → game_id: dm-42          │  different lobby
+  │               participant_id: 1      │
+  ├──────────────────────────────────────┤
+  │ ConnectionSession D (Dan)            │
+  │   state: Authenticating              │  not in lobby yet
+  └──────────────────────────────────────┘
+
+join_flow:
+  path_a_managed:
+    name: Online browse (API token)
+    steps:
+      - actor: client
+        action: GET /v1/games
+        via: HTTPS
+      - actor: game_api
+        action: return cached_games from heartbeat
+      - actor: client
+        action: POST /v1/games or POST /v1/games/{id}/join
+        via: HTTPS
+      - actor: game_api
+        action: forward to game_server management API
+      - actor: game_server
+        action: GameRegistry.create or GameInstance.admit; mint join_token
+      - actor: client
+        action: ENet connect host:port
+      - actor: game_server
+        action: EVENT_CONNECT → ConnectionSession Authenticating
+      - actor: client
+        action: JoinAuth { token } on reliable channel 1
+      - actor: game_server
+        action: validate token → GameInstance.admit → InLobby → Participant in stands
+
+  path_b_direct:
+    name: Direct connect / LAN / local New Game
+    game_api: none
+    join_direct_payload:
+      name: required
+      game_id:
+        managed: rejected (allow_direct_join=false)
+        dedicated: omitted — server uses sole preloaded instance
+      create_map_mode: ignored on dedicated (lobby exists at boot)
+    steps:
+      - actor: client
+        action: ENet connect host:port
+        note: local New Game spawns IonStrikersServer first, then 127.0.0.1
+      - actor: game_server
+        action: EVENT_CONNECT → ConnectionSession Authenticating
+        requires: allow_direct_join == true
+      - actor: client
+        action: JoinDirect { name } reliable ch1
+      - actor: game_server
+        action: GameRegistry.resolve_join_direct() → sole instance on dedicated
+      - actor: game_server
+        action: GameInstance.admit → InLobby → Participant in stands
+
+  after_admission:
+    - client: team menu → setTeam
+    - game_server: balance check; spawn Pawn
+
+  preserved_from_web:
+    - every join lands in stands first
+    - explicit team pick with balance check
+    - single GameInstance.admit implementation for token and direct paths
+
+participant_pawn_connection:
+  ConnectionSession:
+    lifetime: while connected
+    owns: wire, RTT, input_seq
+    ties_to: ENetPacketPeer
+  Participant:
+    lifetime: match
+    owns: name, K/D, streak, team
+    ties_to: ConnectionSession optional
+  Pawn:
+    lifetime: one life
+    owns: position, health
+    ties_to: Participant
+  examples:
+    death_respawn:
+      ConnectionSession: same
+      Participant: same
+      Pawn: old destroyed, new spawned
+    to_stands_change_team:
+      ConnectionSession: same
+      Participant: same K/D, team updated
+      Pawn: destroyed, new on spawn
+    disconnect:
+      ConnectionSession: destroyed
+      Participant: policy for rejoin window
+      Pawn: destroyed if was in world
+
+capacity_enforcement:
+  order:
+    - layer: ENetHost
+      when: active_peers >= max_peers
+      action: refuse_new_connections
+    - layer: GameRegistry
+      when: active_lobbies >= max_lobbies
+      action: reject create_game
+    - layer: GameInstance
+      when: stands or teams full
+      action: join_error
+  sizing_worst_case: |
+    20 lobbies × (16 players + 24 spectators) = 800 peers ≪ 2048 default cap
+
+wire_mapping:
+  JoinDirect:
+    channel: reliable_1
+    fields:
+      name: required string
+      game_id: optional uuid — omitted on dedicated; required if multi-lobby direct ever enabled
+      password: optional future
+    dedicated_resolution: GameRegistry.resolve_join_direct() → sole preloaded GameInstance
+  ConnectionSession:
+    path_a_client_sends:
+      - JoinAuth
+    path_b_client_sends:
+      - JoinDirect
+    server_sends:
+      - JoinOk
+      - JoinError
+      - disconnect
+    channel: reliable_1
+    notes: protocol/build version negotiated in handshake message
+  Participant:
+    client_sends:
+      - setTeam
+      - name
+    server_sends:
+      - team events
+      - score updates
+    channel: reliable_2
+  Pawn:
+    client_sends:
+      - input
+      rate_hz: 60
+    server_sends:
+      - snapshot
+      rate_hz: 30
+    channel: unreliable_sequenced_0
+  Match:
+    server_sends:
+      - roundStart
+      - roundEnd
+      - matchOver
+    channel: reliable_2
+
+persistence:
+  LobbySnapshot:
+    includes:
+      - schema_version
+      - snapshot_seq
+      - taken_at
+      - game_id
+      - display_name
+      - mode
+      - map_id
+      - max_players
+      - max_spectators
+      - rules
+      - lifecycle_state
+      - match: { match_id, score_blue, score_red, round_num }
+      - participants: [{ participant_id, display_name, team, kills, deaths, is_bot }]
+    excludes:
+      - per_tick_transforms
+      - enet_peer_handles
+      - node_references
+      - input_packets

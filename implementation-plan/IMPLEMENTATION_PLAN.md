@@ -43,6 +43,14 @@ The architecture plan predates these. All are carried through this document:
    partitions inside that pool — `max_lobbies`, `max_players`, and
    `max_spectators` are policy knobs that must fit under the global peer limit
    (§9.3, §10).
+8. **The Game API is optional at runtime.** Managed browse/create on
+   `game.ionstrikers.com` uses the Go API; dedicated, LAN, direct-connect, and
+   **New Game** (local dedicated spawned by the client, CS-style) talk to the
+   Game Server over ENet only. One admission path on the server; two ways to reach
+   it (API token vs in-band direct join). See §10, §12.3.
+9. **State tree and join paths** are specified in
+   `implementation-plan/state-spec.yml` (v3 — includes dedicated implicit lobby
+   and `GameRegistry.resolve_join_direct()`). Referenced from §11.
 
 ---
 
@@ -337,8 +345,8 @@ free-move/preview/first-person model viewer with a clip dropdown
 
 ## 4. The feel, and the exact numbers that produce it
 
-The movement is a deliberate port of Source-engine (Kisak-Strike/CS:GO) physics,
-documented at `public/game.js:15`. These constants **are** the game and should be
+The movement is inspired by Counter-Strike and Quake, documented at
+`public/game.js:15`. These constants **are** the game and should be
 moved across unchanged, then locked behind a single tuning resource:
 
 | Constant | Value | Source |
@@ -559,6 +567,13 @@ to today's lobby WebSocket messages, it is out of scope.
 | `joinError` (full / gone) | HTTP 4xx with reason string |
 | implicit: same host for lobby + game | response includes `{ host, port, game_id, join_token }`; client opens a **separate ENet** connection for gameplay |
 
+**Dedicated servers and the API.** Registration is **optional** (§10). When a
+dedicated server registers and heartbeats, it appears in `GET /v1/games` with
+**exactly one row** — the preloaded lobby. Clients using the browser still call
+`POST /v1/games/{id}/join` (Path A); the `game_id` is always that single
+instance. Clients using **direct connect** to `host:port` skip the API entirely
+and use Path B (§12.5) with no `game_id`.
+
 **Adds over the web version (native client needs, not new product features):**
 
 - short-lived **join tokens** (web trusted "connect then join"; desktop benefits from API-minted credentials)
@@ -580,6 +595,11 @@ Package layout:
 The API may pre-check capacity before calling the server, but the **Game Server
 is always authoritative** — same as today, where the server sends `joinError`
 even if the menu thought a slot existed.
+
+**Game API not required to play.** Sessions that already know `host:port` — LAN
+friends, internet dedicated, local **New Game** — skip HTTPS entirely and use
+the direct join path (§12.5). The API remains required for public server-browser
+hosting on `game.ionstrikers.com`, not for every client launch.
 
 ### 9.2 Internal management API — lobby plumbing only
 
@@ -651,29 +671,51 @@ interface a future scheduler can implement — without changing gameplay code un
 
 ---
 
-## 10. One binary, two policies
+## 10. One binary, two policies (+ local spawn)
 
 `GameServer` reads a `HostingPolicy`:
 
-| | Managed | Dedicated |
-|---|---|---|
-| `max_peers` | 2048 (default global ENet cap) | same |
-| `max_lobbies` | 20 | 1 |
-| `preload` | none | one `GameInstance` at boot |
-| `allow_dynamic_create` | yes (via management API / `POST /v1/games`) | no |
-| Registration with Game API | required | optional |
+| | Managed | Dedicated | Local dedicated (New Game) |
+|---|---|---|---|
+| `max_peers` | 2048 (default) | same | same |
+| `max_lobbies` | 20 | 1 | 1 |
+| `preload` | none | one `GameInstance` at boot | one `GameInstance` at boot |
+| `allow_dynamic_create` | yes (API / mgmt) | no | no |
+| `allow_direct_join` | no (token required) | yes | yes |
+| Registration with Game API | required | optional | no |
+| Typical launcher | client browser UI | direct connect / optional listing | **client spawns server process** |
 
-Everything below `GameRegistry` is identical. Dedicated is `max_lobbies=1` +
-`preload` — not a second code path. Note the plan's own clarification: 1/1 means
-*one lobby*, which still holds 8/12/16 players.
+Everything below `GameRegistry` is identical. Dedicated and local dedicated are
+both `max_lobbies=1` + `preload` — not separate simulation code. **Local
+dedicated** is dedicated policy where the desktop client starts the headless
+server binary as a **child process** (Counter-Strike / Source pattern), passes
+create settings via argv or a temp config file, connects to `127.0.0.1:port`, and
+tears the server down on exit. No listen-server authority in the render process.
+
+**Client ships two executables** (or one export with `--headless`): `IonStrikers`
+and `IonStrikersServer`. Same GDExtension and `game-core`; server entrypoint is
+the headless Godot project in `server/`.
+
+**Listen-server rejected for V1.** Host-play inside the same process as
+simulation reintroduces client/server coupling the rebuild avoids. Local dedicated
+child process gives the same UX as "New Game" without that model.
+
+Note: **1/1 means one lobby**, not one player — that lobby still holds up to 16
+players plus spectators.
+
+**Dedicated implicit lobby.** With `max_lobbies=1` and a preloaded
+`GameInstance`, there is no lobby picker on the wire. Direct join (`JoinDirect`)
+omits `game_id`; the server resolves to the sole active instance (see §12.5).
+Internet dedicated servers may optionally register with the Game API so the same
+lobby appears in the browser — one listing row, same preloaded game.
 
 **Port budget** (managed or dedicated):
 
 | Port | Protocol | Who connects |
 |---|---|---|
-| Public HTTPS | TCP/TLS | Clients → Game API |
-| Gameplay | UDP (+ optional DTLS) | Clients → Game Server — **one port, all lobbies** |
-| Management | TCP/TLS (private bind) | Game API → Game Server only |
+| Public HTTPS | TCP/TLS | Clients → Game API (browser sessions only) |
+| Gameplay | UDP (+ optional DTLS) | Clients → Game Server — all sessions |
+| Management | TCP/TLS (private bind) | Game API → Game Server (managed hosting only) |
 
 Extra gameplay UDP ports are acceptable (e.g. one port per lobby via multiple
 `ENetConnection` hosts) but **not** the V1 design — one host with peer→lobby
@@ -683,6 +725,9 @@ dedicated (1 lobby → 1 port is natural); multi-lobby managed should stay on on
 ---
 
 ## 11. Ownership and lifetimes
+
+Full state trees, client vs server, connection binding, join paths, and wire
+mapping: **`implementation-plan/state-spec.yml`**.
 
 ```
 Process
@@ -712,43 +757,116 @@ Rules that make §5 impossible by construction:
 
 ## 12. Create and join
 
-### 12.1 Web → new mapping
+### 12.1 Client session modes
+
+| Mode | Menu entry | Game API | Game Server |
+|---|---|---|---|
+| **Online browse** | Join / Create (browser) | `GET/POST /v1/games…` | ENet + token (§12.4) |
+| **Direct connect** | Connect to `host:port` | none | ENet + `JoinDirect { name }` — no `game_id` on dedicated (§12.5) |
+| **New Game (local)** | New Game / Play offline | none | client spawns local dedicated → ENet `127.0.0.1` + direct join (§12.5) |
+| **Dedicated in browser** | Join (one listed game) | optional register → single row in `GET /v1/games` | ENet + token (§12.4) or direct |
+
+All modes converge on the same server state tree (§11, `state-spec.yml`) and the
+same stands-first team flow after admission.
+
+### 12.2 Web → online browse mapping
 
 **List:** client → `GET /v1/games` → Game API (cached from server heartbeats) —
 equivalent to `listRooms` / `roomList()`.
 
 **Create:** client → `POST /v1/games` → API → server `create_game` →
 `GameRegistry.create()` → `{ game_id, host, port, join_token }` → client
-**ENet connect** → reliable handshake presents token → peer bound to
-`GameInstance`.
+ENet connect → token handshake (§12.4).
 
 **Join:** client → `POST /v1/games/{id}/join` → API → server validates slot →
-same endpoint response → ENet connect + token handshake.
+same endpoint response → ENet + token handshake.
 
 Create options stay small, matching today's create screen
 (`public/index.html:365`+): mode, map, rounds *or* kill target,
 player slots, spectator slots, bots on/off, optional server name — plus the
 dev-mode-only "bots shoot back" toggle (gated on server `DEV_MODE`, as today).
 
-### 12.2 Connection lifecycle
+### 12.3 New Game — local dedicated (CS-style)
+
+1. User picks map/mode/bots on a **New Game** screen (same fields as create).
+2. Client picks a free UDP port (or fixed default with fallback).
+3. Client spawns `IonStrikersServer --dedicated --local --port …` (+ config path
+   or argv for map/mode/bots).
+4. Server starts with `allow_direct_join=true`, `register_with_game_api=false`,
+   preloaded `GameInstance`.
+5. Client ENet connect to `127.0.0.1:port` → **JoinDirect** (§12.5).
+6. On client exit (or host "stop server"), terminate child process.
+
+Optional later: friends join via LAN direct connect to host machine IP (same
+`JoinDirect` path; server already running).
+
+### 12.4 Path A — managed join (API token)
+
+```
+Client → HTTPS (create/join) → join_token
+Client → ENet connect host:port
+Server → ConnectionSession Authenticating
+Client → JoinAuth { token } reliable ch1
+Server → validate token → bind GameInstance → InLobby → Participant in stands
+```
+
+Token auth replaces open WebSocket join for **public managed** hosting.
+
+### 12.5 Path B — direct join (no API)
+
+For dedicated, LAN, and local New Game when `allow_direct_join=true`:
+
+```
+Client → ENet connect host:port (no HTTPS)
+Server → ConnectionSession Authenticating
+Client → JoinDirect { name, … } reliable ch1
+Server → resolve target GameInstance → admit → stands
+```
+
+**`JoinDirect` payload by hosting policy:**
+
+| Field | Managed | Dedicated / local dedicated |
+|---|---|---|
+| `name` | required | required |
+| `game_id` | N/A (`allow_direct_join=false`) | **omitted** — server uses sole preloaded instance |
+| `create`, `map`, `mode`, … | N/A | **ignored** — lobby exists at boot |
+
+**Lobby resolution on the server** (`GameRegistry.resolve_join_direct()`):
+
+1. If `max_lobbies == 1` and exactly one active `GameInstance` → use it (dedicated
+   implicit lobby — no client-side lobby selection).
+2. Else if `game_id` present and valid → use that instance (future multi-lobby
+   direct, if ever enabled).
+3. Else → reject with `JoinError`.
+
+Dedicated direct connect is intentionally **Counter-Strike-shaped**: `connect
+host:port` plus callsign is enough; the client never specifies which lobby.
+
+**One admission implementation** inside `GameInstance.admit()` — token path
+resolves token → instance, then calls the same admit logic as `JoinDirect`.
+
+Protocol/build version is checked in the handshake on reliable ch1 (replacing
+the API version gate for direct sessions). Optional server password is a future
+field on `JoinDirect`; not required for local New Game.
+
+### 12.6 Connection lifecycle (common after admission)
 
 ENet has no lobby concept. Every player is one peer on the shared host; lobby
 membership is application state:
 
 ```
-1. Client ENet connect to host:port (same endpoint for all lobbies)
+1. Client ENet connect to host:port
 2. Server: EVENT_CONNECT → ConnectionSession state = Authenticating
-3. Client → server: JoinAuth { token } on reliable channel 1
-4. Server validates token, sets session.game_instance, state = InLobby
-5. All gameplay packets: router resolves peer → GameInstance (structural isolation)
+3. Path A: JoinAuth { token }  OR  Path B: JoinDirect { … }  on reliable ch1
+4. Server validates → session.game_instance set → state = InLobby
+5. All gameplay packets: router resolves peer → GameInstance
 6. Disconnect: session destroyed; instance drops participant when appropriate
 ```
 
 **Preserved joining rule.** Today *every* arrival lands in the stands and picks a
 side explicitly, and the team menu greys out illegal choices with the reason
-(`teamOptions()`, `server.js`). It is good design — an explicit choice that always
-passes the balance check — and should be kept. Token auth replaces "anyone who
-can open the WebSocket may join" for native clients; stands-first flow is unchanged.
+(`teamOptions()`, `server.js`). Token or direct join only changes *how you reach
+the stands*; the team flow is unchanged.
 
 ---
 
@@ -905,8 +1023,8 @@ u32  tick        simulation tick this refers to
 ...  payload
 ```
 
-**Protocol version is negotiated once** in the join handshake on reliable channel 1,
-not repeated per message.
+**Protocol version is negotiated once** in the join handshake on reliable channel 1
+(`JoinAuth` or `JoinDirect`), not repeated per message.
 
 ### 15.3 Payload encoding — fixed layout, quantised
 
@@ -1075,7 +1193,7 @@ browser with real input. The equivalents:
 | Dedicated soak | Thousands of matches in one preloaded 1/1 instance; assert flat memory and no accumulation. |
 | Network conditions | Latency, jitter, loss, reordering, duplication against reconciliation. |
 | Persistence | Delayed writes, coalescing, stale versions, failures without stalling. |
-| Integration | API → create → discover → join → ENet → play → end → cleanup |
+| Integration | API browse path + direct-connect path + local New Game → ENet → play → end → cleanup |
 
 Two lessons from today's work on the existing suite, worth carrying: a test that
 waits *n* seconds for an emergent event needs a window justified by measurement
@@ -1157,6 +1275,9 @@ leaks a resource silently starves its own later sections.
    forward. The Game API already tracks build and protocol version, so the hook
    exists — but the delivery channel is a product decision, and Milestone 12
    should not be the first time it is discussed.
+10. **Local dedicated spawn** — child process lifecycle (port pick, crash if server
+   dies, kill on exit) is platform-specific glue. Reuse the same `JoinDirect` path;
+   keep spawn logic in the client shell, not in simulation code.
 
 ---
 
@@ -1169,8 +1290,8 @@ leaks a resource silently starves its own later sections.
 | 2 | `game-core` + lifecycle | Movement, hitbox and rules ported; unit tests pass with no engine. Lifecycle tests show owned state destroyed, not reset. Invalid transitions fail loudly. |
 | 3 | Headless server skeleton | Same binary runs managed (max 20 lobbies) and dedicated 1/1. `max_peers` configured (default 2048); global peer cap and lobby cap reported; 21st lobby create rejected. |
 | 4 | Game API | Web-parity list/create/join (§9.1); server register + heartbeat; internal management wire (§9.2); TTL eviction; version gating. A CLI can list, create, and join. |
-| 5 | Transport | One `ENetConnection` host, `max_peers` set; handshake + token auth; reliable + unreliable lanes; peer→instance routing. Two clients in *different* lobbies on the *same* port reach the correct instance; cross-lobby leakage test passes. |
-| 6 | Client skeleton + UI port | Callsign, menu, join, create, settings screens with the §3.3 theme; exclusive screen manager with the ui.test contract re-expressed. |
+| 5 | Transport | One `ENetConnection` host, `max_peers` set; Path A (`JoinAuth`) + Path B (`JoinDirect`, no `game_id` on dedicated); reliable + unreliable lanes; peer→instance routing. Dedicated direct connect lands in sole preloaded lobby. Cross-lobby isolation test passes. |
+| 6 | Client skeleton + UI port | Callsign, menu, join, create, settings, **direct connect**, **New Game (local dedicated spawn)** with §3.3 theme; exclusive screen manager with the ui.test contract re-expressed. |
 | 7 | First playable | Spawn, move, fire, authoritative hit/death/respawn/score, Classic + DM minimum rules. Two clients complete a match; all match state destroyed after. |
 | 8 | Prediction and feel | Input replay reconciliation; movement indistinguishable from the live build at 0 ms and acceptable at 100 ms. Side-by-side comparison against the live build is the acceptance test. |
 | 9 | Assets and animation | Mannequin, arms, guns, maps, audio migrated; gun-ready locomotion reproduced via `AnimationTree`; ragdoll re-implemented or replaced. |
