@@ -23,6 +23,16 @@ static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 	return out
 
 
+# The same solids as build_colliders, as a brush world. Movement traces against
+# this; the AABB list is still what hitscan and bot nav consume until they move
+# over too. Imported .map geometry will add real brushes here rather than boxes.
+static func build_world(compiled: Dictionary) -> CollisionWorld:
+	var world := CollisionWorld.new()
+	world.add_boxes(build_colliders(compiled))
+	world.build()
+	return world
+
+
 static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
 	var arena: float = compiled["arena"]
 

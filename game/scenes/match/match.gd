@@ -16,6 +16,7 @@ const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 var pawn: LocalPawn
 var client: GameClient
 var _colliders: Array[AABB] = []
+var _world: CollisionWorld = null
 var _map_id: String = "parkour"
 var _mode: String = "classic"
 var _my_team: int = 0
@@ -131,6 +132,7 @@ func _build_map() -> void:
 
 	var compiled := MapEngine.compile(map_def)
 	_colliders = MapBuilder.build_visual(self, compiled)
+	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
 
 
@@ -316,7 +318,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 
 	pawn = LocalPawn.new()
 	add_child(pawn)
-	pawn.setup(_colliders)
+	pawn.setup(_colliders, _world)
 	pawn.movement.position = spawn_pos
 	pawn.movement.yaw = yaw
 

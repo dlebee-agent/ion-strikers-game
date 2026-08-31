@@ -27,6 +27,7 @@ var _fp_skeleton: Skeleton3D
 var _tp_skeleton: Skeleton3D
 var _fp_anim_player: AnimationPlayer
 var _colliders: Array[AABB] = []
+var _world: CollisionWorld = null
 var team_color: String = "blue"
 # Bumped to abandon a queued return-to-idle, standing in for clearTimeout().
 var _fp_once_gen := 0
@@ -84,8 +85,9 @@ const FP_BLEND_CHANNEL := 0.15
 func _init() -> void:
 	movement = Movement.new()
 
-func setup(colliders: Array[AABB]) -> void:
+func setup(colliders: Array[AABB], world: CollisionWorld) -> void:
 	_colliders = colliders
+	_world = world
 	movement.position = Vector3.ZERO
 	movement.velocity = Vector3.ZERO
 	movement.on_ground = true
@@ -394,7 +396,7 @@ func process_input(dt: float) -> void:
 			movement.yaw = rad_to_deg(atan2(-move_dir.x, -move_dir.z))
 			wish_fwd = 1.0
 
-	movement.update(dt, wish_fwd, wish_side, want_jump, want_crouch, want_walk, _colliders)
+	movement.update(dt, wish_fwd, wish_side, want_jump, want_crouch, want_walk, _world)
 
 	if InputBinds.is_action_pressed("fire"):
 		weapon.try_fire(camera_rig.get_aim_origin(), camera_rig.get_aim_direction(),
