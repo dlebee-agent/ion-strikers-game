@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 DevMode="*res://core/dev_mode.gd"
 InputBinds="*res://core/input_binds.gd"
+InputSettings="*res://core/input_settings.gd"
 UiRoot="*res://core/ui_root.gd"
 AudioMix="*res://core/audio_mix.gd"
 Announcer="*res://core/announcer.gd"

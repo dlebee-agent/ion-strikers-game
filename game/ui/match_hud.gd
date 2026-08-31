@@ -40,10 +40,12 @@ var _chat_tab_hint: Label
 var _scoreboard: Scoreboard
 var _match_over: MatchOverOverlay
 var _controls_card: ControlsCard
+var _settings_screen: SettingsScreen
 var _hint: Label
 var _leave_btn: Button
 var _team_btn: Button
 var _keys_btn: Button
+var _settings_btn: Button
 
 var _banner_tween: Tween
 var _is_in_stands: bool = true
@@ -58,6 +60,7 @@ signal leave_requested
 signal lobby_requested
 signal team_menu_requested
 signal controls_requested
+signal settings_requested
 signal chat_submitted(text: String, team_only: bool)
 
 const KILL_FEED_MAX := 6
@@ -440,8 +443,24 @@ func _build_controls() -> void:
 	_keys_btn.visible = false
 	_root.add_child(_keys_btn)
 
+	_settings_btn = Button.new()
+	_settings_btn.text = "SETTINGS"
+	_settings_btn.tooltip_text = "Volume · mouse · rebind keys"
+	_settings_btn.custom_minimum_size = Vector2(110, 36)
+	_settings_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_settings_btn.position = Vector2(-400, 16)
+	_settings_btn.pressed.connect(func() -> void: settings_requested.emit())
+	_settings_btn.visible = false
+	_root.add_child(_settings_btn)
+
 	_controls_card = ControlsCard.new()
 	_root.add_child(_controls_card)
+
+	# Sits beside _root rather than inside it, so opening settings can hide the
+	# whole HUD without hiding the settings page along with it.
+	_settings_screen = SettingsScreen.new("◀  RESUME", true)
+	_settings_screen.close_requested.connect(func() -> void: settings_requested.emit())
+	add_child(_settings_screen)
 
 	if InputBinds:
 		InputBinds.bindings_changed.connect(_on_bindings_changed)
@@ -681,6 +700,7 @@ func show_cursor_controls(vis: bool) -> void:
 	_leave_btn.visible = vis
 	_team_btn.visible = vis
 	_keys_btn.visible = vis
+	_settings_btn.visible = vis
 
 
 func toggle_controls_card() -> void:
@@ -701,6 +721,28 @@ func dismiss_controls_card() -> void:
 
 func is_controls_visible() -> bool:
 	return _controls_card.is_open()
+
+
+func present_settings() -> void:
+	_controls_card.dismiss()
+	_settings_screen.refresh()
+	_settings_screen.visible = true
+	_root.visible = false
+
+
+func dismiss_settings() -> void:
+	_settings_screen.cancel_listening()
+	_settings_screen.visible = false
+	_root.visible = true
+	show_cursor_controls(true)
+
+
+func is_settings_open() -> bool:
+	return _settings_screen.visible
+
+
+func is_settings_listening_bind() -> bool:
+	return _settings_screen.is_listening()
 
 
 func _hint_text() -> String:

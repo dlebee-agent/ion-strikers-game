@@ -9,7 +9,7 @@ var callsign_screen: Control
 var home_screen: Control
 var join_screen: Control
 var create_screen: Control
-var settings_screen: Control
+var settings_screen: SettingsScreen
 var menu_chrome: Control
 var stage_glows: Control
 var stage_host: SubViewportContainer
@@ -43,23 +43,9 @@ var brief_bots_move: Label
 var sum_total: Label
 var server_in: LineEdit
 var launch_note: Label
-var invert_y_check: Button
-var binds_container: VBoxContainer
 var _foot_binds: Label
-var master_slider: HSlider
-var sfx_slider: HSlider
-var music_slider: HSlider
-var sens_slider: HSlider
-var master_val: Label
-var sfx_val: Label
-var music_val: Label
-var sens_val: Label
 
 var _callsign: String = ""
-var _settings_cfg := ConfigFile.new()
-var _listening_action: String = ""
-var _listening_slot: int = -1
-var _listening_button: Button
 var _blip_t: float = 0.0
 
 var selected_hosting: String = "lan"
@@ -72,7 +58,6 @@ var selected_spec: int = 12
 var selected_bots: bool = true
 var selected_bots_shoot: bool = true
 var selected_bots_move: bool = true
-var invert_y: bool = false
 
 var _mode_btns: Array[Button] = []
 var _hosting_btns: Array[Button] = []
@@ -104,10 +89,6 @@ func _ready() -> void:
 	UiRoot.screen_changed.connect(_on_screen_changed)
 
 	_load_callsign()
-	_load_input_settings()
-	_setup_settings_ui()
-	_rebuild_binds_ui()
-	InputBinds.bindings_changed.connect(_rebuild_binds_ui)
 	InputBinds.bindings_changed.connect(_refresh_bind_chrome)
 	_refresh_brief()
 	_render_server_list()
@@ -130,8 +111,6 @@ func _process(dt: float) -> void:
 		live_blip.modulate.a = a
 	if live_blip_chrome:
 		live_blip_chrome.modulate.a = a
-	if not _listening_action.is_empty() and _listening_button:
-		_listening_button.modulate.a = 0.35 + 0.65 * absf(sin(_blip_t * TAU))
 
 
 func _on_screen_changed(screen_name: String) -> void:
@@ -147,6 +126,8 @@ func _on_screen_changed(screen_name: String) -> void:
 		_menu_stage.set_active(on_home)
 	if screen_name == "callsign":
 		callsign_input.grab_focus()
+	if screen_name == "settings":
+		settings_screen.refresh()
 
 
 func _build() -> void:
@@ -732,97 +713,9 @@ func _build_create() -> void:
 
 
 func _build_settings() -> void:
-	settings_screen = _screen()
-	var col := _page(settings_screen, false, true)
-	var back := _add_back(col)
-	back.pressed.connect(func() -> void: UiRoot.show("menu"))
-	col.add_child(MenuLook.kicker("Configuration"))
-	col.add_child(MenuLook.heading("SETTINGS", 40))
-
-	var grid := HBoxContainer.new()
-	grid.add_theme_constant_override("separation", 20)
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var grid_m := MarginContainer.new()
-	grid_m.add_theme_constant_override("margin_top", 18)
-	grid_m.add_child(grid)
-	col.add_child(grid_m)
-
-	var vol := PanelContainer.new()
-	vol.custom_minimum_size.x = 320
-	MenuLook.apply_panel(vol, 18)
-	grid.add_child(vol)
-	var vv := VBoxContainer.new()
-	vol.add_child(vv)
-	vv.add_child(MenuLook.kicker("Volume"))
-	master_slider = _vol_row(vv, "Master", "All audio", AudioMix.master_pct, func(v: float) -> void:
-		AudioMix.set_master(int(v))
-		master_val.text = "%d%%" % int(v))
-	master_val = vv.get_meta("last_val")
-	sfx_slider = _vol_row(vv, "SFX", "Weapons · impacts · announcer", AudioMix.sfx_pct, func(v: float) -> void:
-		AudioMix.set_sfx(int(v))
-		sfx_val.text = "%d%%" % int(v))
-	sfx_val = vv.get_meta("last_val")
-	music_slider = _vol_row(vv, "Music", "Menu & match-over themes", AudioMix.music_pct, func(v: float) -> void:
-		AudioMix.set_music(int(v))
-		music_val.text = "%d%%" % int(v))
-	music_val = vv.get_meta("last_val")
-
-	var mouse_k := MarginContainer.new()
-	mouse_k.add_theme_constant_override("margin_top", 24)
-	mouse_k.add_child(MenuLook.kicker("Mouse"))
-	vv.add_child(mouse_k)
-	sens_slider = _vol_row(vv, "Sensitivity", "Applies to looking around in a match", 100, func(v: float) -> void:
-		var s := v / 20.0
-		sens_val.text = "%.2f" % s
-		_settings_cfg.set_value("input", "sensitivity", s)
-		_save_input_settings(), 2.0, 100.0, 1.0)
-	sens_val = vv.get_meta("last_val")
-	sens_slider.min_value = 2.0
-	sens_slider.max_value = 100.0
-	sens_slider.step = 1.0
-
-	invert_y_check = Button.new()
-	invert_y_check.toggle_mode = true
-	invert_y_check.text = "  Invert mouse Y"
-	invert_y_check.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	MenuLook.apply_ghost(invert_y_check, 14)
-	invert_y_check.add_theme_font_override("font", MenuLook.FONT_HEADING_SB)
-	invert_y_check.toggled.connect(func(on: bool) -> void:
-		invert_y = on
-		_settings_cfg.set_value("input", "invert_y", on)
-		_save_input_settings())
-	var inv_m := MarginContainer.new()
-	inv_m.add_theme_constant_override("margin_top", 18)
-	inv_m.add_child(invert_y_check)
-	vv.add_child(inv_m)
-
-	var binds := PanelContainer.new()
-	binds.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	MenuLook.apply_panel(binds, 18)
-	grid.add_child(binds)
-	var bv := VBoxContainer.new()
-	binds.add_child(bv)
-	var bh := HBoxContainer.new()
-	bh.add_child(MenuLook.kicker("Key bindings"))
-	var sp := Control.new()
-	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bh.add_child(sp)
-	bh.add_child(MenuLook.kicker("Click a bind to change it · ESC cancels · DEL clears", MenuLook.MUTE_3, 10))
-	bv.add_child(bh)
-	binds_container = VBoxContainer.new()
-	binds_container.add_theme_constant_override("separation", 0)
-	var bc_m := MarginContainer.new()
-	bc_m.add_theme_constant_override("margin_top", 12)
-	bc_m.add_child(binds_container)
-	bv.add_child(bc_m)
-	var reset := Button.new()
-	reset.text = "RESET DEFAULTS"
-	MenuLook.apply_ghost(reset)
-	reset.pressed.connect(_on_reset_binds)
-	var reset_m := MarginContainer.new()
-	reset_m.add_theme_constant_override("margin_top", 18)
-	reset_m.add_child(reset)
-	bv.add_child(reset_m)
+	settings_screen = SettingsScreen.new()
+	settings_screen.close_requested.connect(func() -> void: UiRoot.show("menu"))
+	add_child(settings_screen)
 
 
 func _build_chrome() -> void:
@@ -1152,30 +1045,6 @@ func _fill_join_cols(row: HBoxContainer, cols: Array, header: bool) -> void:
 		row.add_child(l)
 
 
-func _vol_row(parent: VBoxContainer, label: String, hint: String, value: float, on_change: Callable, min_v := 0.0, max_v := 100.0, step := 1.0) -> HSlider:
-	var row := HBoxContainer.new()
-	var rm := MarginContainer.new()
-	rm.add_theme_constant_override("margin_top", 14)
-	rm.add_child(row)
-	parent.add_child(rm)
-	var l := MenuLook.body(label, 14, MenuLook.INK)
-	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(l)
-	var val := MenuLook.mono("%d%%" % int(value) if max_v == 100.0 and min_v == 0.0 else "%.2f" % (value / 20.0), 12, MenuLook.CY)
-	row.add_child(val)
-	parent.set_meta("last_val", val)
-	var sl := HSlider.new()
-	sl.min_value = min_v
-	sl.max_value = max_v
-	sl.step = step
-	sl.value = value
-	MenuLook.apply_slider(sl)
-	parent.add_child(sl)
-	parent.add_child(MenuLook.kicker(hint, MenuLook.MUTE_3, 10))
-	sl.value_changed.connect(on_change)
-	return sl
-
-
 func _paint_opts(btns: Array[Button]) -> void:
 	for b in btns:
 		MenuLook.apply_opt(b, b.get_meta("active", false), "opt")
@@ -1415,12 +1284,6 @@ func _on_designer_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/designer/designer.tscn")
 
 
-func _on_reset_binds() -> void:
-	InputBinds.reset_to_defaults()
-	_rebuild_binds_ui()
-	_refresh_bind_chrome()
-
-
 func _footer_binds_text() -> String:
 	return "%s move · %s jump · %s crouch · %s chat · %s team · %s controls" % [
 		"WASD",
@@ -1451,152 +1314,12 @@ func _save_callsign() -> void:
 	cfg.save("user://player.cfg")
 
 
-func _load_input_settings() -> void:
-	_settings_cfg.load("user://settings.cfg")
-	invert_y = _settings_cfg.get_value("input", "invert_y", false)
-	var sens: float = _settings_cfg.get_value("input", "sensitivity", 1.0)
-	if sens <= 1.0 and _settings_cfg.get_value("input", "sensitivity", 1.0) == 0.15:
-		sens = 1.0
-	if invert_y_check:
-		invert_y_check.button_pressed = invert_y
-	if sens_slider:
-		sens_slider.value = clampf(sens, 0.1, 5.0) * 20.0
-		sens_val.text = "%.2f" % sens
-
-
-func _save_input_settings() -> void:
-	_settings_cfg.save("user://settings.cfg")
-
-
-func _setup_settings_ui() -> void:
-	master_slider.value = AudioMix.master_pct
-	sfx_slider.value = AudioMix.sfx_pct
-	music_slider.value = AudioMix.music_pct
-	master_val.text = "%d%%" % AudioMix.master_pct
-	sfx_val.text = "%d%%" % AudioMix.sfx_pct
-	music_val.text = "%d%%" % AudioMix.music_pct
-	var sens: float = _settings_cfg.get_value("input", "sensitivity", 1.0)
-	if sens <= 0.2:
-		sens = 1.0
-	sens_slider.value = clampf(sens, 0.1, 5.0) * 20.0
-	sens_val.text = "%.2f" % (sens_slider.value / 20.0)
-	invert_y_check.button_pressed = invert_y
-
-
-func _rebuild_binds_ui() -> void:
-	for child in binds_container.get_children():
-		child.queue_free()
-	for group_data: Array in InputBinds.BIND_GROUPS:
-		var group_name: String = group_data[0]
-		var actions: Array = group_data[1]
-		var header := MenuLook.kicker(group_name, MenuLook.CY if group_name != "Combat" else MenuLook.RD_SOFT, 10)
-		var hm := MarginContainer.new()
-		hm.add_theme_constant_override("margin_top", 20)
-		hm.add_theme_constant_override("margin_bottom", 8)
-		hm.add_child(header)
-		binds_container.add_child(hm)
-		var head := HBoxContainer.new()
-		head.add_theme_constant_override("separation", 8)
-		var h1 := MenuLook.kicker("", MenuLook.MUTE_3, 9)
-		h1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		head.add_child(h1)
-		var p := MenuLook.kicker("Primary", MenuLook.MUTE_3, 9)
-		p.custom_minimum_size.x = 96
-		p.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		head.add_child(p)
-		var a := MenuLook.kicker("Alt", MenuLook.MUTE_3, 9)
-		a.custom_minimum_size.x = 96
-		a.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		head.add_child(a)
-		binds_container.add_child(head)
-		for action_name: String in actions:
-			binds_container.add_child(_bind_row(InputBinds.BIND_LABELS.get(action_name, action_name), action_name))
-
-
-func _bind_row(label: String, action_name: String) -> Control:
-	var wrap := PanelContainer.new()
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0.043, 0.039, 0.086, 0.55)
-	bg.set_corner_radius_all(4)
-	bg.content_margin_left = 12
-	bg.content_margin_right = 12
-	bg.content_margin_top = 7
-	bg.content_margin_bottom = 7
-	wrap.add_theme_stylebox_override("panel", bg)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	wrap.add_child(row)
-	var lab := MenuLook.body(label, 14, MenuLook.INK)
-	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(lab)
-	for slot in 2:
-		var key_name: String = InputBinds.bindings[action_name][slot]
-		var btn := Button.new()
-		btn.text = InputBinds.get_display_name(key_name)
-		btn.custom_minimum_size = Vector2(96, 30)
-		MenuLook.apply_bind_key(btn, key_name.is_empty(), false, false)
-		var bound_action := action_name
-		var bound_slot := slot
-		btn.pressed.connect(func() -> void: _start_listening(bound_action, bound_slot, btn))
-		row.add_child(btn)
-	var gap := MarginContainer.new()
-	gap.add_theme_constant_override("margin_bottom", 6)
-	gap.add_child(wrap)
-	return gap
-
-
-func _start_listening(action_name: String, slot: int, btn: Button) -> void:
-	_listening_action = action_name
-	_listening_slot = slot
-	_listening_button = btn
-	btn.text = "..."
-	MenuLook.apply_bind_key(btn, false, true, false)
-
-
-func _unhandled_key_input(event: InputEvent) -> void:
-	if _listening_action.is_empty():
-		return
-	if event is InputEventKey and event.pressed and not event.echo:
-		_capture_bind_event(event)
-
-
-func _capture_bind_event(event: InputEvent) -> void:
-	if event is InputEventKey:
-		var key_event := event as InputEventKey
-		if key_event.keycode == KEY_ESCAPE:
-			_stop_listening()
-			return
-		if key_event.keycode == KEY_DELETE or key_event.keycode == KEY_BACKSPACE:
-			InputBinds.set_bind(_listening_action, _listening_slot, "")
-			_stop_listening()
-			return
-	var key_name := InputBinds.event_to_bind_name(event)
-	if not key_name.is_empty():
-		InputBinds.set_bind(_listening_action, _listening_slot, key_name)
-	_stop_listening()
-
-
-func _stop_listening() -> void:
-	_listening_action = ""
-	_listening_slot = -1
-	if _listening_button:
-		_listening_button.modulate.a = 1.0
-	_listening_button = null
-	_rebuild_binds_ui()
-
-
 func _input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open():
 		return
-	if not _listening_action.is_empty() and event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.pressed:
-			_capture_bind_event(mb)
-		get_viewport().set_input_as_handled()
-		return
 	if event.is_action_pressed("ui_cancel"):
 		if UiRoot.current_screen != "menu" and UiRoot.current_screen != "callsign":
-			if not _listening_action.is_empty():
-				_stop_listening()
+			if settings_screen.is_listening():
+				settings_screen.cancel_listening()
 			else:
 				UiRoot.show("menu")

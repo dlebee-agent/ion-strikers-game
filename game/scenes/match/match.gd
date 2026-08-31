@@ -93,6 +93,8 @@ func _ready() -> void:
 	if Announcer:
 		Announcer.banner_requested.connect(_on_announcer_banner)
 
+	InputSettings.changed.connect(_apply_input_settings)
+
 	if _parse_round_state(str(init_data.get("round_state", "active"))) == Protocol.RS_OVER:
 		var winner := Protocol.TEAM_BLUE if _last_score_blue >= _last_score_red else Protocol.TEAM_RED
 		if _last_score_blue == _last_score_red:
@@ -119,6 +121,7 @@ func _setup_spectator_camera() -> void:
 	movement.position = Vector3(0, 8, -20)
 	_camera_rig.setup(movement)
 	_camera_rig.set_mode(CameraRig.Mode.THIRD_PERSON)
+	InputSettings.apply_to(_camera_rig)
 	add_child(_camera_rig)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -130,6 +133,7 @@ func _build_hud() -> void:
 	_hud.lobby_requested.connect(_exit_to_lobby)
 	_hud.team_menu_requested.connect(_show_team_panel)
 	_hud.controls_requested.connect(_toggle_controls_card)
+	_hud.settings_requested.connect(_toggle_settings)
 	_hud.chat_submitted.connect(_on_chat_submit)
 	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
 
@@ -157,6 +161,8 @@ func _build_team_panel() -> void:
 func _show_team_panel() -> void:
 	if _match_over:
 		return
+	if _hud.is_settings_open():
+		_hud.dismiss_settings()
 	if _hud.is_controls_visible():
 		_hud.dismiss_controls_card()
 	if _team_panel.is_open():
@@ -193,11 +199,35 @@ func _toggle_controls_card() -> void:
 
 func _close_controls_card() -> void:
 	_hud.dismiss_controls_card()
+	_restore_cursor()
+
+
+func _toggle_settings() -> void:
+	if _hud.is_settings_open():
+		_hud.dismiss_settings()
+		_restore_cursor()
+		return
+	if _team_panel.is_open():
+		_team_panel.close()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_hud.present_settings()
+
+
+## Back to mouselook if there is a body to look with, otherwise leave the cursor
+## out so the stands buttons stay clickable.
+func _restore_cursor() -> void:
 	if not _in_stands and _alive:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		_hud.show_cursor_controls(false)
 	else:
 		_hud.show_cursor_controls(true)
+
+
+func _apply_input_settings() -> void:
+	if pawn and pawn.camera_rig:
+		InputSettings.apply_to(pawn.camera_rig)
+	if _camera_rig:
+		InputSettings.apply_to(_camera_rig)
 
 
 # ── Team / spawn ─────────────────────────────────────────────────────────
@@ -272,6 +302,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 	var team_str := "blue" if _my_team == Protocol.TEAM_BLUE else "red"
 	pawn.set_team(team_str)
 	pawn.camera_rig.set_mode(CameraRig.Mode.FIRST_PERSON)
+	InputSettings.apply_to(pawn.camera_rig)
 	pawn.set_mannequin_visible(false)
 	pawn.set_fp_arms_visible(true)
 
@@ -292,7 +323,8 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 # ── Physics + input ──────────────────────────────────────────────────────
 
 func _physics_process(dt: float) -> void:
-	var blocked := _team_panel.is_open() or ConfirmPrompt.is_open() or _hud.is_chat_open()
+	var blocked := _team_panel.is_open() or ConfirmPrompt.is_open() or _hud.is_chat_open() \
+		or _hud.is_settings_open()
 	if pawn and _alive and not _in_stands and not _match_over and not blocked:
 		pawn.process_input(dt)
 		if client:
@@ -311,7 +343,8 @@ func _physics_process(dt: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() or _match_over:
+	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
+			or _hud.is_settings_open() or _match_over:
 		return
 	if event is InputEventMouseMotion and pawn and pawn.camera_rig and _alive:
 		var motion := event as InputEventMouseMotion
@@ -321,6 +354,14 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open():
+		return
+
+	# A bind waiting for a key eats its own input, so anything reaching here
+	# while settings are up is meant for the page itself.
+	if _hud.is_settings_open():
+		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
+			_toggle_settings()
+			get_viewport().set_input_as_handled()
 		return
 
 	if _hud.is_chat_open():
@@ -806,6 +847,8 @@ func _enter_match_over(winner: int) -> void:
 		pawn.weapon.special_armed = false
 	if _team_panel.is_open():
 		_team_panel.close()
+	if _hud.is_settings_open():
+		_hud.dismiss_settings()
 	if _hud.is_controls_visible():
 		_hud.dismiss_controls_card()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
