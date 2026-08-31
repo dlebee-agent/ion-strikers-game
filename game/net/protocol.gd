@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 4
+const PROTOCOL_VERSION := 5
 
 const MODE_CLASSIC := 0
 const MODE_DM := 1
@@ -46,6 +46,9 @@ enum Msg {
 	ANNOUNCE,
 	METEOR,
 	ROSTER,
+	SET_CHEATS,
+	CHEATS,
+	SET_CHEATS_DENIED,
 }
 
 enum Team { TEAM_NONE = 0, TEAM_BLUE = 1, TEAM_RED = 2 }
@@ -98,7 +101,7 @@ static func channel_for(t: int) -> int:
 	match t:
 		Msg.STATE, Msg.SNAP:
 			return CH_UNRELIABLE
-		Msg.HIT, Msg.TRACER, Msg.ROUND_START, Msg.ROUND_END, Msg.MATCH_OVER, Msg.RESPAWN, Msg.CHAT, Msg.SPECIAL, Msg.ANNOUNCE, Msg.METEOR, Msg.ROSTER:
+		Msg.HIT, Msg.TRACER, Msg.ROUND_START, Msg.ROUND_END, Msg.MATCH_OVER, Msg.RESPAWN, Msg.CHAT, Msg.SPECIAL, Msg.ANNOUNCE, Msg.METEOR, Msg.ROSTER, Msg.CHEATS:
 			return CH_EVENTS
 		_:
 			return CH_HANDSHAKE
@@ -368,6 +371,13 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["lead_ms"] = b.get_u16()
 			d["radius"] = b.get_float()
 		Msg.LEAVE:
+			pass
+		Msg.SET_CHEATS:
+			d["enabled"] = b.get_u8() != 0
+			d["password"] = _read_string(b)
+		Msg.CHEATS:
+			d["enabled"] = b.get_u8() != 0
+		Msg.SET_CHEATS_DENIED:
 			pass
 	return d
 
@@ -782,5 +792,29 @@ static func encode_meteor(
 static func encode_leave() -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.LEAVE)
+	b.put_u8(0)
+	return b.data_array
+
+
+static func encode_set_cheats(enabled: bool, password: String) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.SET_CHEATS)
+	b.put_u8(0)
+	b.put_u8(1 if enabled else 0)
+	_write_string(b, password)
+	return b.data_array
+
+
+static func encode_cheats(enabled: bool) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.CHEATS)
+	b.put_u8(0)
+	b.put_u8(1 if enabled else 0)
+	return b.data_array
+
+
+static func encode_set_cheats_denied() -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.SET_CHEATS_DENIED)
 	b.put_u8(0)
 	return b.data_array

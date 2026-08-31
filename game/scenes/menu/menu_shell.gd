@@ -1317,6 +1317,8 @@ func _save_callsign() -> void:
 func _input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open():
 		return
+	if GameConsole.is_open():
+		return
 	if event.is_action_pressed("ui_cancel"):
 		if UiRoot.current_screen != "menu" and UiRoot.current_screen != "callsign":
 			if settings_screen.is_listening():

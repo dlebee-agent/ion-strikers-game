@@ -19,15 +19,49 @@ var _parent_pid: int = -1
 const PARENT_CHECK_INTERVAL := 1.0
 var _parent_check_timer: float = 0.0
 
+var _admin_password_hash: PackedByteArray = []
+var _ip_fail_counts: Dictionary = {}   # ip_str → int (total failures)
+var _ip_lockout_until: Dictionary = {}  # ip_str → float (msec)
+var _ip_banned: Dictionary = {}         # ip_str → true
+const AUTH_LOCKOUT_THRESHOLD := 5
+const AUTH_LOCKOUT_DURATION_MS := 30000.0
+const AUTH_BAN_THRESHOLD := 10
 
-func configure(port: int, parent_pid: int = -1) -> void:
+
+var _max_lobbies: int = 1
+
+
+func configure(port: int, parent_pid: int = -1, admin_password: String = "") -> void:
 	_port = port
 	_parent_pid = parent_pid
+	if not admin_password.is_empty():
+		var ctx := HashingContext.new()
+		ctx.start(HashingContext.HASH_SHA256)
+		ctx.update(admin_password.to_utf8_buffer())
+		_admin_password_hash = ctx.finish()
+
+
+## Must be called before _ready; the registry is built there.
+func set_max_lobbies(count: int) -> void:
+	_max_lobbies = maxi(count, 1)
+
+
+## Built on first use so collaborators wired up before the node enters the
+## tree (the management server, the registrar) share the same instance.
+func get_registry() -> GameRegistry:
+	if _registry == null:
+		_registry = GameRegistry.new()
+		_registry.max_lobbies = _max_lobbies
+	return _registry
+
+
+## Adopts a lobby created outside the ENet path (i.e. by the Game API).
+func attach_instance(inst: GameInstance) -> void:
+	_connect_instance(inst)
 
 
 func _ready() -> void:
-	_registry = GameRegistry.new()
-	_registry.max_lobbies = 1
+	get_registry()
 
 	_host = ENetConnection.new()
 	var err := _host.create_host_bound("0.0.0.0", _port, 32, Protocol.MAX_CHANNELS)
@@ -81,6 +115,11 @@ func _poll_enet() -> void:
 		var peer_id := _peer_id(peer)
 
 		if event_type == ENetConnection.EVENT_CONNECT:
+			var ip := peer.get_remote_address()
+			if _ip_banned.has(ip):
+				peer.peer_disconnect_now(0)
+				print("[server] banned IP %s attempted reconnect" % ip)
+				continue
 			_sessions[peer_id] = {"peer": peer, "instance": null, "authed": false}
 			print("[server] peer %d connected" % peer_id)
 
@@ -124,6 +163,8 @@ func _on_receive(peer_id: int, channel: int, data: PackedByteArray) -> void:
 				_handle_special_fire(peer_id)
 			Protocol.Msg.LEAVE:
 				_on_disconnect(peer_id)
+			Protocol.Msg.SET_CHEATS:
+				_handle_set_cheats(peer_id, msg)
 
 	elif channel == Protocol.CH_EVENTS:
 		if t == Protocol.Msg.CHAT:
@@ -189,6 +230,8 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 	session["authed"] = true
 
 	_send(peer_id, Protocol.CH_HANDSHAKE, result["init"])
+	if result.get("cheats", false):
+		_send(peer_id, Protocol.CH_EVENTS, Protocol.encode_cheats(true))
 	print("[server] peer %d joined as '%s' (stands)" % [peer_id, callsign])
 
 
@@ -256,6 +299,54 @@ func _handle_chat(peer_id: int, msg: Dictionary) -> void:
 	if inst == null:
 		return
 	inst.handle_chat(peer_id, str(msg.get("text", "")), bool(msg.get("team_only", false)))
+
+
+func _handle_set_cheats(peer_id: int, msg: Dictionary) -> void:
+	var inst := _get_instance(peer_id)
+	if inst == null:
+		return
+	if _admin_password_hash.is_empty():
+		_send(peer_id, Protocol.CH_HANDSHAKE, Protocol.encode_set_cheats_denied())
+		return
+
+	var peer: ENetPacketPeer = _sessions[peer_id]["peer"]
+	var ip := peer.get_remote_address()
+
+	if _ip_banned.has(ip):
+		peer.peer_disconnect_now(0)
+		return
+
+	var now_ms := Time.get_ticks_msec() as float
+	if _ip_lockout_until.has(ip) and now_ms < _ip_lockout_until[ip]:
+		_send(peer_id, Protocol.CH_HANDSHAKE, Protocol.encode_set_cheats_denied())
+		return
+
+	var submitted: String = str(msg.get("password", ""))
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(submitted.to_utf8_buffer())
+	var submitted_hash := ctx.finish()
+
+	if submitted_hash != _admin_password_hash:
+		if not _ip_fail_counts.has(ip):
+			_ip_fail_counts[ip] = 0
+		_ip_fail_counts[ip] += 1
+		var fails: int = _ip_fail_counts[ip]
+		print("[server] bad admin password from %s (attempt %d)" % [ip, fails])
+
+		if fails >= AUTH_BAN_THRESHOLD:
+			_ip_banned[ip] = true
+			print("[server] IP %s banned after %d failed admin attempts" % [ip, fails])
+			peer.peer_disconnect_now(0)
+			return
+		elif fails >= AUTH_LOCKOUT_THRESHOLD:
+			_ip_lockout_until[ip] = now_ms + AUTH_LOCKOUT_DURATION_MS
+
+		_send(peer_id, Protocol.CH_HANDSHAKE, Protocol.encode_set_cheats_denied())
+		return
+
+	var enabled: bool = bool(msg.get("enabled", false))
+	inst.handle_set_cheats(enabled)
 
 
 func _on_disconnect(peer_id: int) -> void:

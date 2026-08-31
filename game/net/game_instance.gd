@@ -18,6 +18,7 @@ var max_spectators: int = 12
 var bots_enabled: bool = true
 var bots_shoot: bool = true
 var bots_move: bool = true
+var cheats: bool = false
 
 var match_state: MatchState
 var participants: Dictionary = {}   # id → Participant
@@ -141,6 +142,7 @@ func admit_spectator(peer_id: int, callsign: String) -> Dictionary:
 	return {
 		"ok": true,
 		"init": _build_init_data(peer_id),
+		"cheats": cheats,
 	}
 
 
@@ -384,6 +386,13 @@ func handle_chat(peer_id: int, text: String, team_only: bool) -> void:
 			event_team_broadcast.emit(p.team, Protocol.CH_EVENTS, msg)
 	else:
 		event_broadcast.emit(Protocol.CH_EVENTS, msg, -1)
+
+
+func handle_set_cheats(enabled: bool) -> void:
+	cheats = enabled
+	var text := "Cheats enabled." if cheats else "Cheats disabled."
+	_sys_chat(text)
+	event_broadcast.emit(Protocol.CH_EVENTS, Protocol.encode_cheats(cheats), -1)
 
 
 # ── SNAP ─────────────────────────────────────────────────────────────────

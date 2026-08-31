@@ -37,6 +37,7 @@ func _init(back_text: String = "◀  MAIN MENU", opaque: bool = false) -> void:
 
 
 func _ready() -> void:
+	add_to_group("settings_screens")
 	refresh()
 	_rebuild_binds()
 	InputBinds.bindings_changed.connect(_rebuild_binds)

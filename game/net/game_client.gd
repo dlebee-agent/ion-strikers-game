@@ -18,6 +18,8 @@ signal team_received(msg: Dictionary)
 signal team_opts_received(msg: Dictionary)
 signal team_denied_received(msg: Dictionary)
 signal roster_received(msg: Dictionary)
+signal cheats_changed(enabled: bool)
+signal cheats_denied()
 
 var _host: ENetConnection
 var _peer: ENetPacketPeer
@@ -69,6 +71,7 @@ func disconnect_from_server() -> void:
 	_peer = null
 	_connected = false
 	_authed = false
+	GameConsole.clear_session()
 
 
 func send_state(pos: Vector3, yaw: float, pitch: float, crouched: bool) -> void:
@@ -129,6 +132,13 @@ func send_chat(text: String, team_only: bool) -> void:
 	_peer.send(Protocol.CH_EVENTS, buf, ENetPacketPeer.FLAG_RELIABLE)
 
 
+func send_set_cheats(enabled: bool, password: String) -> void:
+	if not _authed or _peer == null:
+		return
+	var buf := Protocol.encode_set_cheats(enabled, password)
+	_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
+
+
 func _process(_dt: float) -> void:
 	if _host == null:
 		return
@@ -152,6 +162,7 @@ func _process(_dt: float) -> void:
 		elif event_type == ENetConnection.EVENT_DISCONNECT:
 			_connected = false
 			_authed = false
+			GameConsole.clear_session()
 			connection_failed.emit("Disconnected from server.")
 
 		elif event_type == ENetConnection.EVENT_RECEIVE:
@@ -201,6 +212,8 @@ func _on_receive(channel: int, data: PackedByteArray) -> void:
 				team_opts_received.emit(msg)
 			Protocol.Msg.TEAM_DENIED:
 				team_denied_received.emit(msg)
+			Protocol.Msg.SET_CHEATS_DENIED:
+				cheats_denied.emit()
 
 	elif channel == Protocol.CH_EVENTS:
 		match t:
@@ -226,3 +239,5 @@ func _on_receive(channel: int, data: PackedByteArray) -> void:
 				meteor_received.emit(msg)
 			Protocol.Msg.ROSTER:
 				roster_received.emit(msg)
+			Protocol.Msg.CHEATS:
+				cheats_changed.emit(bool(msg.get("enabled", false)))

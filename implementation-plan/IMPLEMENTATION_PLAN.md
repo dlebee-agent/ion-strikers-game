@@ -588,8 +588,16 @@ Package layout:
 - `internal/discovery` — cached joinable-lobby list (successor of `roomList()`)
 - `internal/lobby` — create/join; forwards to the Game Server management surface
 - `internal/auth` — join-token minting and validation helpers
-- `internal/serverreg` — registration, heartbeat ingestion, TTL eviction (V1:
-  one configured managed server; interface ready for a second server later)
+- `internal/store` — registry storage interface (put/get/list/delete servers and
+  lobby snapshots with TTL). Two implementations: **in-memory** (default, single
+  process, no external deps) and **Redis** (shared across multiple API replicas;
+  every key uses a configurable prefix, e.g. `ionstrikers:v1:`, so deployments
+  sharing a Redis instance do not collide). Config: `STORE=memory|redis`
+  (default `memory`), `REDIS_URL`, `REDIS_KEY_PREFIX`.
+- `internal/serverreg` — registration, heartbeat ingestion, TTL eviction via the
+  store. Servers self-register with `allow_dynamic_create` capability; create-host
+  selection picks the **first healthy server** with `allow_dynamic_create=true`
+  and available lobby + peer capacity. No scheduler beyond first-with-capacity.
 - `internal/config` — typed config; **no globals**
 
 The API may pre-check capacity before calling the server, but the **Game Server
@@ -607,10 +615,28 @@ Splitting lobby (Go) from simulation (Godot) requires a **private** Game API ↔
 Game Server wire. This is not new player-facing surface; it mirrors what
 `server.js` already does in-process when handling `listRooms` / `join`.
 
-Transport: JSON over HTTPS on a **private bind** (or JSON-lines over
-`TCPServer` in the GDExtension — Godot has no built-in HTTP server; implement
-in `native/src/server/`). Authenticate with a shared secret or mTLS; never
-expose on the public player path.
+Transport is asymmetric, because each direction has different constraints:
+
+- **Game Server → API** (`register`, `heartbeat`): HTTPS, since Godot's
+  `HTTPRequest` is an outbound client.
+- **API → Game Server** (`create_game`, `join_game`, `destroy_game`):
+  JSON-lines over `TCPServer` on a **private bind**, because Godot has no
+  built-in HTTP server.
+
+Authentication is a per-registration RSA key exchange rather than a shared
+secret. At `register` the server sends its public key and the API replies with a
+key pair minted for that registration; afterwards the server signs its
+heartbeats and the API signs its management commands, each verified against the
+key received during the handshake. Signatures use PKCS#1 v1.5 over SHA-256 —
+RSA rather than EdDSA because Godot's `Crypto` class only exposes RSA. Every
+signed message carries a timestamp, rejected outside a clock-skew window or if
+it does not advance, which bounds replay.
+
+Registration itself is deliberately unauthenticated: being listed grants no
+authority, so there is nothing to gate. What the handshake protects is
+*continuity* — only the key holder can heartbeat as a given `server_id`, and a
+server acts only on commands from the API it handshook with, so reaching the
+management port is not by itself enough to drive it.
 
 Minimal operations (V1):
 
@@ -665,9 +691,12 @@ Simulation tick cost will bite before the peer table does at these numbers. Rais
 
 The Go API mirrors (2) and (3) for fast failures but must not be the only enforcement.
 
-Server selection in V1 is "the one configured managed Game Server" behind an
-interface a future scheduler can implement — without changing gameplay code under
-`GameInstance`.
+Server selection in V1 is **first healthy registered server with
+`allow_dynamic_create=true` and available capacity** — behind an interface a
+future scheduler can implement — without changing gameplay code under
+`GameInstance`. Dedicated/private servers (`allow_dynamic_create=false`) are
+listed in `GET /v1/games` and joinable via `POST /v1/games/{id}/join` but are
+**never** used as create hosts.
 
 ---
 

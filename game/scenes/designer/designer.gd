@@ -3,6 +3,7 @@ extends Node3D
 const LocalPawn = preload("res://core/local_pawn.gd")
 const CameraRig = preload("res://core/camera_rig.gd")
 const AnimDriver = preload("res://core/anim_driver.gd")
+const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 
 # Long enough to cover the discharge clip plus its blend out.
 const SPECIAL_DISCHARGE_HOLD := 0.55
@@ -47,6 +48,7 @@ var _current_clip_index := -1
 var _clip_names: PackedStringArray = []
 
 func _ready() -> void:
+	add_to_group("match_scene")
 	AudioMix.fade_out_keep_place(400.0)
 	_build_arena()
 	_setup_pawn()
@@ -55,6 +57,9 @@ func _ready() -> void:
 	_populate_clips()
 	_set_team("blue")
 	_set_mode(CameraRig.Mode.FIRST_PERSON)
+
+	var _hitbox_debug := HitboxDebugScript.new()
+	add_child(_hitbox_debug)
 
 func _build_arena() -> void:
 	# No default sky: otherwise the mannequin picks up chrome reflections.
@@ -272,6 +277,8 @@ func _physics_process(dt: float) -> void:
 # the top of the screen and would otherwise swallow motion events before they
 # ever reach unhandled input.
 func _input(event: InputEvent) -> void:
+	if GameConsole.is_open():
+		return
 	if not (event is InputEventMouseMotion) or not pawn or not pawn.camera_rig:
 		return
 	var motion := event as InputEventMouseMotion
@@ -283,6 +290,8 @@ func _input(event: InputEvent) -> void:
 		pawn.camera_rig.handle_mouse_motion(motion.relative)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if GameConsole.is_open():
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		# Getting here means no HUD control took the click, so it landed in the

@@ -19,13 +19,14 @@ const BIND_DEFAULTS: Dictionary = {
 	"chat_all": ["Y", "Enter"],
 	"chat_team": ["U", ""],
 	"spec_swap": ["V", ""],
+	"console": ["`", ""],
 }
 
 const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
 	["Combat", ["fire", "melee", "special"]],
 	["Communication", ["chat_all", "chat_team"]],
-	["Interface", ["team_menu", "scoreboard", "controls", "spec_swap"]],
+	["Interface", ["team_menu", "scoreboard", "controls", "spec_swap", "console"]],
 ]
 
 const BIND_LABELS: Dictionary = {
@@ -45,6 +46,7 @@ const BIND_LABELS: Dictionary = {
 	"chat_all": "Global message",
 	"chat_team": "Team chat",
 	"spec_swap": "Toggle spectate mode",
+	"console": "Developer console",
 }
 
 const MOUSE_BUTTON_NAMES: Dictionary = {
@@ -145,6 +147,7 @@ func _key_name_to_event(key_name: String) -> InputEvent:
 		"F5": KEY_F5, "F6": KEY_F6, "F7": KEY_F7, "F8": KEY_F8,
 		"F9": KEY_F9, "F10": KEY_F10, "F11": KEY_F11, "F12": KEY_F12,
 		"C": KEY_C, "1": KEY_1, "2": KEY_2, "3": KEY_3,
+		"`": KEY_QUOTELEFT,
 	}
 	if key_name in mapping:
 		var ev := InputEventKey.new()
@@ -173,6 +176,7 @@ func event_to_bind_name(event: InputEvent) -> String:
 			KEY_F5: "F5", KEY_F6: "F6", KEY_F7: "F7", KEY_F8: "F8",
 			KEY_F9: "F9", KEY_F10: "F10", KEY_F11: "F11", KEY_F12: "F12",
 			KEY_C: "C", KEY_1: "1", KEY_2: "2", KEY_3: "3",
+			KEY_QUOTELEFT: "`",
 		}
 		var keycode: int = (event as InputEventKey).physical_keycode
 		if keycode in mapping:

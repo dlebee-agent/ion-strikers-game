@@ -313,15 +313,43 @@ client:
 game_api:
   GameApiProcess:
     ServerRegistry:
-      ManagedServer:
+      RegisteredServer:
         keyed_by: server_id
-        v1_count: 1
         owns:
           - endpoint
+          - mgmt_endpoint
           - max_peers
           - max_lobbies
+          - active_peers
+          - active_lobbies
+          - allow_dynamic_create
+          - build_version
+          - protocol_version
           - last_heartbeat_at
           - cached_games[]
+          - server_public_key_pem   # verifies the server's heartbeats
+          - api_private_key_pem     # signs this API's management commands
+          - api_public_key_pem      # handed back at register; server verifies with it
+          - last_signed_at          # highest accepted timestamp; older is a replay
+        health_rule: evict when heartbeat_age > TTL
+        create_host_rule: allow_dynamic_create && healthy && active_lobbies < max_lobbies && active_peers < max_peers; pick first match
+        auth_rule: |
+          Per-registration RSA key exchange, not a shared secret. register is open
+          (listing grants no authority); it swaps public keys. Afterwards heartbeats
+          are signed by the server and management commands by the API, each verified
+          against the key from that handshake. PKCS#1 v1.5 over SHA-256 (RSA because
+          Godot's Crypto exposes no EdDSA). Timestamps must sit inside the clock-skew
+          window and strictly advance, bounding replay.
+
+      store:
+        interface: put/get/list/delete with TTL
+        backends:
+          memory:
+            default: true
+            notes: single process, no deps; heartbeat TTL is process-local expiry
+          redis:
+            config: STORE=redis, REDIS_URL, REDIS_KEY_PREFIX
+            notes: shared across replicas; key prefix namespaces all keys (e.g. ionstrikers:v1:); heartbeat TTL is Redis key TTL
 
     CachedGame:
       mirror_only: true

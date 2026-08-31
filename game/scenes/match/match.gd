@@ -11,6 +11,7 @@ const AnimDriver = preload("res://core/anim_driver.gd")
 const MeteorFx = preload("res://core/meteor_fx.gd")
 const CameraShake = preload("res://core/camera_shake.gd")
 const RagdollScript = preload("res://core/ragdoll.gd")
+const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -63,6 +64,7 @@ var _match_winner: int = 0
 
 
 func _ready() -> void:
+	add_to_group("match_scene")
 	AudioMix.fade_out_keep_place(400.0)
 
 	_map_id = str(init_data.get("map", "parkour"))
@@ -82,6 +84,9 @@ func _ready() -> void:
 	_build_hud()
 	_build_team_panel()
 
+	var _hitbox_debug := HitboxDebugScript.new()
+	add_child(_hitbox_debug)
+
 	if client:
 		add_child(client)
 		client.snap_received.connect(_on_snap)
@@ -100,6 +105,8 @@ func _ready() -> void:
 		client.team_opts_received.connect(_on_team_opts)
 		client.team_denied_received.connect(_on_team_denied)
 		client.roster_received.connect(_on_roster)
+		client.cheats_changed.connect(_on_cheats_changed)
+		client.cheats_denied.connect(_on_cheats_denied)
 
 	if Announcer:
 		Announcer.banner_requested.connect(_on_announcer_banner)
@@ -303,6 +310,9 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 
 	_spectator.stop()
 	_hud.hide_spectator_panel()
+	# Death-follow hides the crosshair whenever it is not in first person, and
+	# a respawn does not otherwise go through _on_team to restore it.
+	_hud.set_stands_mode(false, _my_team)
 
 	pawn = LocalPawn.new()
 	add_child(pawn)
@@ -335,7 +345,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 
 func _physics_process(dt: float) -> void:
 	var blocked := _team_panel.is_open() or ConfirmPrompt.is_open() or _hud.is_chat_open() \
-		or _hud.is_settings_open()
+		or _hud.is_settings_open() or GameConsole.is_open()
 	if pawn and _alive and not _in_stands and not _match_over and not blocked:
 		pawn.process_input(dt)
 		if client:
@@ -376,7 +386,7 @@ func _physics_process(dt: float) -> void:
 
 func _input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
-			or _hud.is_settings_open() or _match_over:
+			or _hud.is_settings_open() or _match_over or GameConsole.is_open():
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := event as InputEventMouseMotion
@@ -388,6 +398,9 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open():
+		return
+
+	if GameConsole.is_open():
 		return
 
 	# A bind waiting for a key eats its own input, so anything reaching here
@@ -868,6 +881,14 @@ func _on_roster(msg: Dictionary) -> void:
 		_player_names[int(e.get("id", 0))] = str(e.get("name", ""))
 	if _hud.is_scoreboard_visible():
 		_update_scoreboard()
+
+
+func _on_cheats_changed(enabled: bool) -> void:
+	GameConsole.on_cheats_changed(enabled)
+
+
+func _on_cheats_denied() -> void:
+	GameConsole.log_line("rejected", GameConsole.COLOR_ERR)
 
 
 func _clock_text() -> String:
