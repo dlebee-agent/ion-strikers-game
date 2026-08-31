@@ -70,7 +70,9 @@ signal chat_submitted(text: String, team_only: bool)
 const KILL_FEED_MAX := 6
 const KILL_FEED_LIFETIME := 5.0
 const BANNER_DURATION := 2.5
-const CHAT_LOG_MAX := 20
+const CHAT_LOG_MAX := 6
+const CHAT_LOG_MAX_END := 12
+const CHAT_TTL := 14.0
 const CHAT_BODY := Color("#f5f8ff")
 const CHAT_BODY_GLOW := Color(0.78, 0.90, 1.0, 0.30)
 
@@ -339,12 +341,16 @@ func _build_chat() -> void:
 	_chat_wrap.alignment = BoxContainer.ALIGNMENT_END
 	_chat_wrap.add_theme_constant_override("separation", 6)
 	_chat_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_chat_wrap.clip_contents = true
 	_root.add_child(_chat_wrap)
 
 	_chat_log = VBoxContainer.new()
 	_chat_log.add_theme_constant_override("separation", 3)
 	_chat_log.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_chat_log.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat_log.alignment = BoxContainer.ALIGNMENT_END
+	_chat_log.clip_contents = true
 	_chat_wrap.add_child(_chat_log)
 
 	_chat_bar = PanelContainer.new()
@@ -600,7 +606,9 @@ func show_kill(killer_name: String, victim_name: String, cause: int, head: bool,
 	_kill_feed.add_child(row)
 
 	if _kill_feed.get_child_count() > KILL_FEED_MAX:
-		_kill_feed.get_child(0).queue_free()
+		var old := _kill_feed.get_child(0)
+		_kill_feed.remove_child(old)
+		old.queue_free()
 
 	var tw := create_tween()
 	tw.tween_interval(KILL_FEED_LIFETIME)
@@ -744,8 +752,11 @@ func add_chat_message(name_text: String, text: String, team: int, team_only: boo
 		row.add_child(body)
 
 	_chat_log.add_child(row)
-	while _chat_log.get_child_count() > CHAT_LOG_MAX:
-		_chat_log.get_child(0).queue_free()
+	_trim_chat_log()
+	if not _match_over_active:
+		var tw := create_tween()
+		tw.tween_interval(CHAT_TTL)
+		tw.tween_callback(_expire_chat_row.bind(row))
 
 
 func open_chat(team_only: bool) -> void:
@@ -887,6 +898,32 @@ func _layout_chat() -> void:
 	var above_combat := not _is_in_stands and not _match_over_active
 	_chat_wrap.offset_bottom = -188.0 if above_combat else -36.0
 	_chat_wrap.offset_top = -420.0 if above_combat else -280.0
+	_trim_chat_log()
+
+
+func _chat_cap() -> int:
+	return CHAT_LOG_MAX_END if _match_over_active else CHAT_LOG_MAX
+
+
+func _trim_chat_log() -> void:
+	if not _chat_log:
+		return
+	var cap := _chat_cap()
+	while _chat_log.get_child_count() > cap:
+		_drop_chat_row(_chat_log.get_child(0))
+
+
+func _drop_chat_row(row: Node) -> void:
+	if row == null or row.get_parent() != _chat_log:
+		return
+	_chat_log.remove_child(row)
+	row.queue_free()
+
+
+func _expire_chat_row(row: Node) -> void:
+	if _match_over_active:
+		return
+	_drop_chat_row(row)
 
 
 func _chat_accent(team: int, _team_only: bool, sys: bool) -> Color:
