@@ -149,12 +149,7 @@ func _handle_join(peer: StreamPeerTCP, msg: Dictionary) -> void:
 		return
 
 	var inst: GameInstance = _registry.instances[game_id]
-	var humans := 0
-	for p: Participant in inst.participants.values():
-		if not p.is_bot:
-			humans += 1
-
-	if humans >= inst.max_players + inst.max_spectators:
+	if inst.human_count() >= inst.max_players + inst.max_spectators:
 		_respond(peer, {"ok": false, "reason": "Lobby is full."})
 		return
 
@@ -166,13 +161,13 @@ func _handle_destroy(peer: StreamPeerTCP, msg: Dictionary) -> void:
 	if game_id.is_empty():
 		_respond(peer, {"error": "game_id required"})
 		return
-	if not _registry.instances.has(game_id):
+	if not _game_server.has_method("release_instance"):
 		_respond(peer, {"error": "game not found"})
 		return
-
-	var inst: GameInstance = _registry.instances[game_id]
-	_registry.remove_instance(game_id)
-	inst.queue_free()
+	var released: bool = _game_server.call("release_instance", game_id)
+	if not released:
+		_respond(peer, {"error": "game not found"})
+		return
 	print("[mgmt] destroyed lobby '%s'" % game_id)
 	_respond(peer, {"ok": true})
 

@@ -65,6 +65,11 @@ const MAX_REWIND_MS := 300.0
 const SPAWN_PROTECTION_MS := 2000.0
 const DM_RESPAWN_MS := 5000.0
 
+## Lobby is released after this long with no human participants. Bots do not count.
+const EMPTY_HUMAN_TTL := 300.0
+# Negative while any human is present; otherwise the instance time they left (0 at create).
+var _empty_since: float = 0.0
+
 
 func _init(cfg: Dictionary = {}) -> void:
 	game_id = cfg.get("game_id", _gen_id())
@@ -149,11 +154,7 @@ func tick(dt: float) -> void:
 # ── Admission ────────────────────────────────────────────────────────────
 
 func admit_spectator(peer_id: int, callsign: String) -> Dictionary:
-	var total_humans := 0
-	for p: Participant in participants.values():
-		if not p.is_bot:
-			total_humans += 1
-	if total_humans >= max_players + max_spectators:
+	if human_count() >= max_players + max_spectators:
 		return {"ok": false, "reason": "Lobby is full."}
 
 	var p := Participant.new(peer_id, callsign)
@@ -163,6 +164,7 @@ func admit_spectator(peer_id: int, callsign: String) -> Dictionary:
 	_sys_chat("%s joined." % callsign)
 	_manage_bots()
 	_roster_dirty = true
+	_refresh_empty_clock()
 
 	return {
 		"ok": true,
@@ -181,6 +183,7 @@ func remove(peer_id: int) -> void:
 	pawns.erase(peer_id)
 	_manage_bots()
 	_roster_dirty = true
+	_refresh_empty_clock()
 
 
 # ── Team management ──────────────────────────────────────────────────────
@@ -946,6 +949,27 @@ func _is_protected(pawn: ServerPawn) -> bool:
 	if pawn == null:
 		return false
 	return _now < pawn.protected_until
+
+
+func human_count() -> int:
+	var n := 0
+	for p: Participant in participants.values():
+		if not p.is_bot:
+			n += 1
+	return n
+
+
+func empty_of_humans_for() -> float:
+	if _empty_since < 0.0:
+		return 0.0
+	return _now - _empty_since
+
+
+func _refresh_empty_clock() -> void:
+	if human_count() > 0:
+		_empty_since = -1.0
+	elif _empty_since < 0.0:
+		_empty_since = _now
 
 
 func _team_count(team: int, include_bots: bool) -> int:

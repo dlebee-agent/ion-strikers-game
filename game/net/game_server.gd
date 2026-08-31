@@ -73,6 +73,32 @@ func attach_instance(inst: GameInstance) -> void:
 	_connect_instance(inst)
 
 
+## Drop a lobby and free its slot. Remaining peers (if any) are disconnected.
+func release_instance(game_id: String, reason: String = "") -> bool:
+	if _registry == null or not _registry.instances.has(game_id):
+		return false
+	var inst: GameInstance = _registry.instances[game_id]
+
+	var drop: Array[int] = []
+	for peer_id: int in _sessions:
+		if _sessions[peer_id].get("instance") == inst:
+			drop.append(peer_id)
+	for peer_id in drop:
+		_sessions[peer_id]["instance"] = null
+		var peer: ENetPacketPeer = _sessions[peer_id]["peer"]
+		peer.peer_disconnect_now(0)
+		_sessions.erase(peer_id)
+
+	_registry.remove_instance(game_id)
+	inst.queue_free()
+	if reason.is_empty():
+		print("[server] released lobby '%s'" % game_id)
+	else:
+		print("[server] released lobby '%s' (%s)" % [game_id, reason])
+	_push_lobbies()
+	return true
+
+
 func _ready() -> void:
 	get_registry()
 
@@ -113,9 +139,14 @@ func _process(dt: float) -> void:
 
 
 func _tick_instances(dt: float) -> void:
+	var expired: Array[String] = []
 	for gid: String in _registry.instances:
 		var inst: GameInstance = _registry.instances[gid]
 		inst.tick(dt)
+		if inst.empty_of_humans_for() >= GameInstance.EMPTY_HUMAN_TTL:
+			expired.append(gid)
+	for gid in expired:
+		release_instance(gid, "no humans for 5m")
 
 
 func _poll_enet() -> void:
@@ -505,3 +536,10 @@ func _send_raw(peer_id: int, channel: int, data: PackedByteArray) -> void:
 
 func _peer_id(peer: ENetPacketPeer) -> int:
 	return peer.get_instance_id()
+
+
+func _push_lobbies() -> void:
+	for child in get_children():
+		if child is ApiRegistrar:
+			(child as ApiRegistrar).push_now()
+			return
