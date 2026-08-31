@@ -93,8 +93,7 @@ func setup_map() -> void:
 	arena_size = compiled.get("arena", 28.0)
 	bot_director.configure(colliders, arena_size, spawns)
 
-	if mode == "dm":
-		match_state.next_meteor_at = _now + match_state.meteor_delay()
+	match_state.next_meteor_at = _now + match_state.meteor_delay()
 
 
 func tick(dt: float) -> void:
@@ -512,6 +511,8 @@ func _start_round() -> void:
 	match_state.round_state = Protocol.RS_ACTIVE
 	match_state.first_blood_done = false
 	match_state.match_point_announced = false
+	match_state.pending_meteor = {}
+	match_state.next_meteor_at = _now + match_state.meteor_delay()
 
 	# Rebalance before redeploying so bots added for this round spawn with everyone else.
 	_manage_bots()
@@ -651,15 +652,13 @@ func _tick_bots(dt: float) -> void:
 
 
 func _tick_meteors(_dt: float) -> void:
-	if mode != "dm":
-		return
-	if match_state.round_state != Protocol.RS_ACTIVE:
-		return
-
 	if not match_state.pending_meteor.is_empty():
 		var impact_at: float = match_state.pending_meteor.get("impact_at", 0.0)
 		if _now >= impact_at:
 			_meteor_impact()
+		return
+
+	if match_state.round_state != Protocol.RS_ACTIVE:
 		return
 
 	if _now >= match_state.next_meteor_at:
@@ -667,8 +666,9 @@ func _tick_meteors(_dt: float) -> void:
 
 
 func _arm_meteor() -> void:
-	var x := (randf() - 0.5) * arena_size * 1.6
-	var z := (randf() - 0.5) * arena_size * 1.6
+	var a := arena_size - 2.5
+	var x := (randf() * 2.0 - 1.0) * a
+	var z := (randf() * 2.0 - 1.0) * a
 
 	var ground_y := 0.0
 	var ray_origin := Vector3(x, 50.0, z)
@@ -695,11 +695,16 @@ func _meteor_impact() -> void:
 	match_state.pending_meteor = {}
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
 
+	if match_state.round_state != Protocol.RS_ACTIVE:
+		return
+
 	for pid: int in participants:
 		if not pawns.has(pid):
 			continue
 		var pawn: ServerPawn = pawns[pid]
 		if not pawn.alive:
+			continue
+		if _is_protected(pawn):
 			continue
 		if _in_blast(pawn.position, Vector3(mx, my, mz), radius, MatchState.METEOR_VERT):
 			_apply_damage(pid, 0, 999, false, Protocol.CAUSE_METEOR)

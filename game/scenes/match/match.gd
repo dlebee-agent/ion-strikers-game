@@ -8,6 +8,8 @@ const ImpactFlash = preload("res://core/impact_flash.gd")
 const SpecialBeam = preload("res://core/special_beam.gd")
 const SpectatorCam = preload("res://core/spectator_cam.gd")
 const AnimDriver = preload("res://core/anim_driver.gd")
+const MeteorFx = preload("res://core/meteor_fx.gd")
+const CameraShake = preload("res://core/camera_shake.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -35,8 +37,8 @@ var _spectator: SpectatorCam
 var _arena_size: float = 28.0
 var _player_names: Dictionary = {}  # id → name
 
-const METEOR_WARN_LEAD := 2.0
 var _meteor_warn_until: float = 0.0
+var _shake := CameraShake.new()
 
 ## Cosmetic clock for the score bar. The server has no round time limit, so this
 ## counts up from the last round start (match start in deathmatch).
@@ -345,6 +347,10 @@ func _physics_process(dt: float) -> void:
 	if _meteor_warn_until > 0.0 and _snap_time > _meteor_warn_until:
 		_hud.show_meteor_warning(false)
 		_meteor_warn_until = 0.0
+
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		_shake.apply(cam, dt)
 
 
 func _input(event: InputEvent) -> void:
@@ -792,8 +798,28 @@ func _on_announcer_banner(text: String, color: Color, sub: String) -> void:
 func _on_meteor(msg: Dictionary) -> void:
 	if _match_over:
 		return
-	_meteor_warn_until = _snap_time + METEOR_WARN_LEAD
+	var x := float(msg.get("x", 0.0))
+	var y := float(msg.get("y", 0.0))
+	var z := float(msg.get("z", 0.0))
+	var lead_ms := int(msg.get("lead_ms", 2600))
+	var radius := float(msg.get("radius", 5.0))
+
+	var fx := MeteorFx.spawn(self, Vector3(x, y, z), lead_ms, radius)
+	fx.impacted.connect(_on_meteor_impact)
+
+	_meteor_warn_until = _snap_time + float(lead_ms) / 1000.0
 	_hud.show_meteor_warning(true)
+
+
+func _on_meteor_impact(pos: Vector3, _radius: float) -> void:
+	var cam := get_viewport().get_camera_3d()
+	var cam_pos := cam.global_position if cam else Vector3.ZERO
+	var dist := Vector2(cam_pos.x - pos.x, cam_pos.z - pos.z).length()
+	_shake.add_at_distance(dist)
+	var k := maxf(0.0, 1.0 - dist / CameraShake.RANGE)
+	var vol := minf(1.0, 0.25 + k * 0.85)
+	if Announcer:
+		Announcer.play_sfx("died", linear_to_db(vol))
 
 
 func _on_roster(msg: Dictionary) -> void:

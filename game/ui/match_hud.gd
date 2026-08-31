@@ -1127,6 +1127,8 @@ func _make_kill_row(killer_name: String, victim_name: String, cause: int, head: 
 
 	if has_killer:
 		row.add_child(_kill_name_label(killer_name, killer_team))
+	else:
+		row.add_child(_kill_name_label(victim_name, victim_team))
 
 	var glyph := KillGlyph.new(int(meta.kind), Color(meta.icon_color))
 	row.add_child(glyph)
@@ -1137,7 +1139,8 @@ func _make_kill_row(killer_name: String, victim_name: String, cause: int, head: 
 	weapon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	row.add_child(weapon)
 
-	row.add_child(_kill_name_label(victim_name, victim_team))
+	if has_killer:
+		row.add_child(_kill_name_label(victim_name, victim_team))
 
 	if not involved:
 		pill.size_flags_horizontal = Control.SIZE_SHRINK_END
@@ -1193,7 +1196,7 @@ func _kill_cause_meta(cause: int, head: bool) -> Dictionary:
 		Protocol.CAUSE_METEOR:
 			return {
 				kind = KillGlyph.Kind.METEOR,
-				weapon = "meteor",
+				weapon = "flattened by meteor",
 				icon_color = KILL_METEOR,
 				weapon_color = KILL_METEOR,
 				accent = KILL_METEOR,
