@@ -146,7 +146,9 @@ func _process(_dt: float) -> void:
 	if _peer and _connected:
 		rtt_ms = _peer.get_statistic(ENetPacketPeer.PEER_ROUND_TRIP_TIME)
 
-	while true:
+	# Handlers below emit signals whose listeners may call disconnect_from_server(),
+	# which destroys the host. Re-check each pass rather than servicing freed memory.
+	while _host != null:
 		var ev := _host.service(0)
 		var event_type: int = ev[0]
 		if event_type == ENetConnection.EVENT_NONE:
