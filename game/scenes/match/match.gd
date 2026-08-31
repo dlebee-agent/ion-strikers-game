@@ -15,7 +15,9 @@ const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 
 var pawn: LocalPawn
 var client: GameClient
-var _colliders: Array[AABB] = []
+var _world: CollisionWorld = null
+# Reused by every tracer, so a firefight allocates nothing.
+var _shot_trace := TraceResult.new()
 var _map_id: String = "parkour"
 var _mode: String = "classic"
 var _my_team: int = 0
@@ -123,15 +125,41 @@ func _ready() -> void:
 
 
 func _build_map() -> void:
-	var map_def: Dictionary
-	if _map_id == "parkour":
-		map_def = ParkourMap.definition()
+	if MapCatalog.is_community(_map_id):
+		_build_community_map()
 	else:
-		map_def = ParkourMap.definition()
+		_build_builtin_map()
 
-	var compiled := MapEngine.compile(map_def)
-	_colliders = MapBuilder.build_visual(self, compiled)
+
+func _build_builtin_map() -> void:
+	var compiled := MapEngine.compile(ParkourMap.definition())
+	MapBuilder.build_visual(self, compiled)
+	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
+
+
+func _build_community_map() -> void:
+	var level := MapCatalog.load_community(_map_id)
+	if not level.ok():
+		push_error("[client] %s did not import (%s); falling back to parkour" % [
+			_map_id, ", ".join(level.warnings)])
+		_build_builtin_map()
+		return
+	for w: String in level.warnings:
+		print("[client] %s: %s" % [_map_id, w])
+
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = level.mesh
+	# Imported geometry is the level's own art, so it lights and shadows like
+	# any other world surface.
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(mesh)
+
+	var ambience := MapCatalog.ambience_for(level)
+	MapBuilder.build_ambience(self, ambience)
+
+	_world = level.world
+	_arena_size = level.arena
 
 
 func _start_spectate_watch() -> void:
@@ -316,7 +344,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 
 	pawn = LocalPawn.new()
 	add_child(pawn)
-	pawn.setup(_colliders)
+	pawn.setup(_world)
 	pawn.movement.position = spawn_pos
 	pawn.movement.yaw = yaw
 
@@ -350,17 +378,18 @@ func _physics_process(dt: float) -> void:
 		pawn.process_input(dt)
 		if client:
 			client.send_state(pawn.movement.position, pawn.movement.yaw,
-				pawn.movement.pitch, pawn.movement.is_crouching)
+				pawn.movement.pitch, pawn.movement.is_crouching,
+				pawn.movement.on_ground)
 		_sync_special_hud()
 
 	_snap_time += dt
 	for pid: int in _remotes:
 		var rp: RemotePawn = _remotes[pid]
 		rp.interpolate(_snap_time)
-		rp.tick_ragdoll(dt, _colliders)
+		rp.tick_ragdoll(dt, _world)
 
 	if _local_ragdoll:
-		_local_ragdoll.update(dt, _colliders)
+		_local_ragdoll.update(dt, _world)
 		if _local_ragdoll.dead:
 			if pawn:
 				pawn.set_mannequin_visible(false)
@@ -595,6 +624,7 @@ func _on_snap(snap: Dictionary) -> void:
 		var p_bot := (pflags & Protocol.PFLG_BOT) != 0
 		var p_special_armed := (pflags & Protocol.PFLG_SPECIAL_ARMED) != 0
 		var p_special_charging := (pflags & Protocol.PFLG_SPECIAL_CHARGING) != 0
+		var p_grounded := (pflags & Protocol.PFLG_GROUNDED) != 0
 
 		p["alive"] = p_alive
 		p["crouched"] = p_crouched
@@ -602,6 +632,7 @@ func _on_snap(snap: Dictionary) -> void:
 		p["bot"] = p_bot
 		p["special_armed"] = p_special_armed
 		p["special_charging"] = p_special_charging
+		p["grounded"] = p_grounded
 
 		if pid == my_id:
 			if p_special_armed and _special_spent:
@@ -699,7 +730,7 @@ func _on_hit(msg: Dictionary) -> void:
 						pawn.set_mannequin_visible(false)
 						_spectator._death_mannequin = pawn.get_mannequin()
 					_spectator.start_death_ragdoll(body_pos, eye_pos,
-						_local_ragdoll, _colliders,
+						_local_ragdoll, _world,
 						_killer_world_pos(by_id))
 			_sync_special_hud()
 			if Announcer:
@@ -721,10 +752,8 @@ func _on_tracer(msg: Dictionary) -> void:
 	var team_str := "blue" if team_val == Protocol.TEAM_BLUE else "red"
 
 	var hit_dist := 200.0
-	for box in _colliders:
-		var t := _ray_aabb(origin, dir, box)
-		if t > 0.0 and t < hit_dist:
-			hit_dist = t
+	if _world != null:
+		hit_dist = _world.ray_distance(origin, dir.normalized(), hit_dist, _shot_trace)
 
 	TracerBolt.spawn(self, origin, dir.normalized(), hit_dist, team_str)
 

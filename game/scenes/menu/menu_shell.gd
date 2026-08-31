@@ -1,10 +1,29 @@
 extends Control
 
-const MAPS: Array[Dictionary] = [
+const BUILTIN_MAPS: Array[Dictionary] = [
 	{"id": "parkour", "name": "Parkour Yard", "desc": "Mirrored stairs & jump blocks. Movement + jump test bed."},
 ]
+
 const MenuStage = preload("res://scenes/menu/menu_stage.gd")
 const _GameApiClient = preload("res://net/game_api.gd")
+
+
+# Built-in maps plus whatever .map files are sitting in maps/community. The
+# community ones are imported to read their name, which also surfaces a broken
+# map here in the lobby rather than at the start of a match.
+static func map_entries() -> Array[Dictionary]:
+	var out: Array[Dictionary] = BUILTIN_MAPS.duplicate()
+	for id: String in MapCatalog.list_community():
+		var level := MapCatalog.load_community(id)
+		if not level.ok():
+			continue
+		out.append({
+			"id": id,
+			"name": level.name if level.name != "" else MapCatalog.display_name(id),
+			"desc": "Community map · %d brushes · %d spawns" % [
+				level.world.brush_count(), level.spawn_count()],
+		})
+	return out
 
 var callsign_screen: Control
 var home_screen: Control
@@ -507,18 +526,17 @@ func _build_create() -> void:
 	_map_select.custom_minimum_size = Vector2(0, 44)
 	_map_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	MenuLook.apply_dropdown(_map_select)
-	for i in MAPS.size():
-		var m: Dictionary = MAPS[i]
+	var entries := map_entries()
+	for i in entries.size():
+		var m: Dictionary = entries[i]
 		_map_select.add_item(str(m["name"]))
 		_map_select.set_item_metadata(i, str(m["id"]))
-		var selectable := str(m["id"]) == "parkour"
-		_map_select.set_item_disabled(i, not selectable)
-		if selectable:
+		if i == 0:
 			_map_select.select(i)
 			selected_map = str(m["id"])
 	_map_select.item_selected.connect(_on_map_selected)
 	left.add_child(_map_select)
-	var map_desc := MenuLook.mono(str(MAPS[0]["desc"]), 10, MenuLook.MUTE_3)
+	var map_desc := MenuLook.mono(str(BUILTIN_MAPS[0]["desc"]), 10, MenuLook.MUTE_3)
 	map_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var map_desc_m := MarginContainer.new()
 	map_desc_m.add_theme_constant_override("margin_top", 8)
@@ -1102,14 +1120,7 @@ func _on_hosting_picked(b: Button) -> void:
 
 
 func _on_map_selected(index: int) -> void:
-	var id := str(_map_select.get_item_metadata(index))
-	if id != "parkour":
-		for i in _map_select.item_count:
-			if str(_map_select.get_item_metadata(i)) == "parkour":
-				_map_select.select(i)
-				id = "parkour"
-				break
-	selected_map = id
+	selected_map = str(_map_select.get_item_metadata(index))
 	_refresh_brief()
 
 
@@ -1144,7 +1155,7 @@ func _on_spec_picked(b: Button) -> void:
 func _refresh_brief() -> void:
 	var classic := selected_mode == "classic"
 	var map_name := "Parkour Yard"
-	for m in MAPS:
+	for m in map_entries():
 		if str(m["id"]) == selected_map:
 			map_name = str(m["name"])
 			break
@@ -1238,9 +1249,13 @@ func _make_lobby_row(game: Dictionary) -> Control:
 
 
 func _map_label(map_id: String) -> String:
-	for m in MAPS:
+	# map_entries() rather than the built-in list, so a hosted game running a
+	# community map shows its name instead of its raw id.
+	for m in map_entries():
 		if str(m["id"]) == map_id:
 			return str(m["name"])
+	if MapCatalog.is_community(map_id):
+		return MapCatalog.display_name(map_id)
 	return map_id if not map_id.is_empty() else "—"
 
 

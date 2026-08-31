@@ -17,6 +17,15 @@ const PFLG_PROTECTED := 4
 const PFLG_BOT := 8
 const PFLG_SPECIAL_ARMED := 16
 const PFLG_SPECIAL_CHARGING := 32
+const PFLG_GROUNDED := 64
+
+# Flags on a client's own state message. Whether the player is standing on
+# something is theirs to report: only they run the movement code that decides
+# it, and it cannot be recovered from position alone. Vertical speed does not
+# separate the two, because at a full run a jump leaves the ground at about the
+# same rate as climbing a steep ramp.
+const SFLG_CROUCHED := 1
+const SFLG_GROUNDED := 2
 
 enum Msg {
 	CREATE_GAME,
@@ -206,7 +215,8 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["round_state"] = _read_string(b)
 			d["max_spectators"] = b.get_u8()
 		Msg.STATE:
-			d["crouched"] = (flags & 1) != 0
+			d["crouched"] = (flags & SFLG_CROUCHED) != 0
+			d["grounded"] = (flags & SFLG_GROUNDED) != 0
 			d["x"] = b.get_float()
 			d["y"] = b.get_float()
 			d["z"] = b.get_float()
@@ -470,10 +480,15 @@ static func encode_init(
 
 static func encode_state(
 		x: float, y: float, z: float,
-		yaw: float, pitch: float, crouched: bool) -> PackedByteArray:
+		yaw: float, pitch: float, crouched: bool, grounded: bool) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.STATE)
-	b.put_u8(1 if crouched else 0)
+	var flags := 0
+	if crouched:
+		flags |= SFLG_CROUCHED
+	if grounded:
+		flags |= SFLG_GROUNDED
+	b.put_u8(flags)
 	b.put_float(x)
 	b.put_float(y)
 	b.put_float(z)

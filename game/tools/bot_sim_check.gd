@@ -5,7 +5,7 @@ extends SceneTree
 
 func _initialize() -> void:
 	var compiled := MapEngine.compile(ParkourMap.definition())
-	var cols := MapBuilder.build_colliders(compiled)
+	var cols := MapBuilder.build_world(compiled)
 	var arena: float = compiled["arena"]
 
 	var nav := BotNav.new()
@@ -37,9 +37,9 @@ func _initialize() -> void:
 
 
 # Dev switch check: bots_move off should leave a bot rooted but still shooting.
-func _pinned_audit(cols: Array[AABB], arena: float) -> void:
+func _pinned_audit(cols: CollisionWorld, arena: float) -> void:
 	var director := BotDirector.new()
-	director.configure(cols, arena, ParkourMap.definition()["spawns"])
+	director.configure(cols, arena, MapCatalog.normalize_spawns(ParkourMap.definition()["spawns"]))
 
 	var bot := Participant.new(-1, "BOT Pinned", true)
 	bot.team = Protocol.TEAM_BLUE
@@ -75,9 +75,9 @@ func _pinned_audit(cols: Array[AABB], arena: float) -> void:
 
 # Drives update_bot() directly with an enemy parked behind the central hill and
 # counts any frame where it wants to shoot while the geometry is in the way.
-func _wall_audit(cols: Array[AABB], arena: float) -> void:
+func _wall_audit(cols: CollisionWorld, arena: float) -> void:
 	var director := BotDirector.new()
-	director.configure(cols, arena, ParkourMap.definition()["spawns"])
+	director.configure(cols, arena, MapCatalog.normalize_spawns(ParkourMap.definition()["spawns"]))
 
 	var shooter := Participant.new(-1, "BOT Audit", true)
 	shooter.team = Protocol.TEAM_BLUE

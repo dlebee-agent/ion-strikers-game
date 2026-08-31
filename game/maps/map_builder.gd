@@ -23,6 +23,26 @@ static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 	return out
 
 
+# The same solids as build_colliders, as a brush world. Movement traces against
+# this; the AABB list is still what hitscan and bot nav consume until they move
+# over too. Imported .map geometry will add real brushes here rather than boxes.
+static func build_world(compiled: Dictionary) -> CollisionWorld:
+	var world := CollisionWorld.new()
+	for box: AABB in build_colliders(compiled):
+		var index := world.add_box(box)
+		if Hitbox.special_blocks(box):
+			world.tag_brush(index, CollisionWorld.CONTENT_SPECIAL)
+	world.build()
+	return world
+
+
+# Lighting and sky, without any of the geometry build_visual also does.
+# Imported levels bring their own brushes but still want the same treatment.
+static func build_ambience(parent: Node3D, compiled: Dictionary) -> void:
+	_build_lighting(parent)
+	_build_environment(parent, compiled)
+
+
 static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
 	var arena: float = compiled["arena"]
 

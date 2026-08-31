@@ -79,10 +79,10 @@ func disconnect_from_server() -> void:
 	GameConsole.clear_session()
 
 
-func send_state(pos: Vector3, yaw: float, pitch: float, crouched: bool) -> void:
+func send_state(pos: Vector3, yaw: float, pitch: float, crouched: bool, grounded: bool) -> void:
 	if not _authed or _peer == null:
 		return
-	var buf := Protocol.encode_state(pos.x, pos.y, pos.z, yaw, pitch, crouched)
+	var buf := Protocol.encode_state(pos.x, pos.y, pos.z, yaw, pitch, crouched, grounded)
 	_peer.send(Protocol.CH_UNRELIABLE, buf, ENetPacketPeer.FLAG_UNSEQUENCED)
 
 

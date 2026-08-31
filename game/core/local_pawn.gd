@@ -26,7 +26,7 @@ var _tp_gun_instance: Node3D
 var _fp_skeleton: Skeleton3D
 var _tp_skeleton: Skeleton3D
 var _fp_anim_player: AnimationPlayer
-var _colliders: Array[AABB] = []
+var _world: CollisionWorld = null
 var team_color: String = "blue"
 # Bumped to abandon a queued return-to-idle, standing in for clearTimeout().
 var _fp_once_gen := 0
@@ -84,8 +84,8 @@ const FP_BLEND_CHANNEL := 0.15
 func _init() -> void:
 	movement = Movement.new()
 
-func setup(colliders: Array[AABB]) -> void:
-	_colliders = colliders
+func setup(world: CollisionWorld) -> void:
+	_world = world
 	movement.position = Vector3.ZERO
 	movement.velocity = Vector3.ZERO
 	movement.on_ground = true
@@ -306,7 +306,7 @@ func _spawn_special_beam() -> void:
 
 	var eye := camera_rig.get_aim_origin()
 	var dir := camera_rig.get_aim_direction()
-	var dist := weapon.raycast_special(eye, dir, _colliders, SPECIAL_RANGE)
+	var dist := weapon.raycast_special(eye, dir, _world, SPECIAL_RANGE)
 	var impact := eye + dir * dist
 	var first_person := camera_rig.mode == CameraRig.Mode.FIRST_PERSON
 	SpecialBeam.spawn(scene, _beam_origin(eye, dir, impact, first_person), impact,
@@ -394,11 +394,11 @@ func process_input(dt: float) -> void:
 			movement.yaw = rad_to_deg(atan2(-move_dir.x, -move_dir.z))
 			wish_fwd = 1.0
 
-	movement.update(dt, wish_fwd, wish_side, want_jump, want_crouch, want_walk, _colliders)
+	movement.update(dt, wish_fwd, wish_side, want_jump, want_crouch, want_walk, _world)
 
 	if InputBinds.is_action_pressed("fire"):
 		weapon.try_fire(camera_rig.get_aim_origin(), camera_rig.get_aim_direction(),
-			_colliders)
+			_world)
 
 	# Auto-fire while held; melee is one punch per press so holding it does not
 	# machine-gun once the cooldown lapses.

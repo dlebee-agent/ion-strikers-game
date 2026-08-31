@@ -117,6 +117,7 @@ func push_snapshot(data: Dictionary, recv_time: float) -> void:
 		"yaw": float(data.get("yaw", 0.0)),
 		"pitch": float(data.get("pitch", 0.0)),
 		"crouched": bool(data.get("crouched", false)),
+		"grounded": bool(data.get("grounded", true)),
 		"alive": bool(data.get("alive", true)),
 		"special_charging": bool(data.get("special_charging", false)),
 	})
@@ -155,6 +156,7 @@ func interpolate(now: float) -> void:
 		"yaw": lerp_angle(deg_to_rad(a["yaw"]), deg_to_rad(b["yaw"]), f),
 		"pitch": lerpf(a["pitch"], b["pitch"], f),
 		"crouched": b["crouched"],
+		"grounded": b.get("grounded", true),
 		"alive": b["alive"],
 		"special_charging": b.get("special_charging", false),
 		"vx": (b["x"] - a["x"]) / span,
@@ -265,11 +267,10 @@ func _apply_pose(pose: Dictionary) -> void:
 			float(pose.get("vx", 0.0)),
 			float(pose.get("vy", 0.0)),
 			float(pose.get("vz", 0.0)))
-		var vy := _movement.velocity.y
-		if vy > 1.2:
-			_movement.on_ground = false
-		elif absf(vy) < 0.4:
-			_movement.on_ground = true
+		# Reported by whoever owns the pawn, not guessed from vertical speed.
+		# Climbing a ramp carries real upward speed, so the old threshold put
+		# every body walking up one into the jump pose and left it there.
+		_movement.on_ground = bool(pose.get("grounded", true))
 		_drive_special(bool(pose.get("special_charging", false)))
 		_anim_driver.update_from_movement(_movement)
 
@@ -320,9 +321,9 @@ func end_ragdoll() -> void:
 		ragdoll = null
 
 
-func tick_ragdoll(dt: float, colliders: Array[AABB]) -> void:
+func tick_ragdoll(dt: float, world: CollisionWorld) -> void:
 	if ragdoll:
-		ragdoll.update(dt, colliders)
+		ragdoll.update(dt, world)
 		if ragdoll.dead:
 			set_body_visible(false)
 			end_ragdoll()

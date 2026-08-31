@@ -25,7 +25,9 @@ var participants: Dictionary = {}   # id → Participant
 var pawns: Dictionary = {}          # id → ServerPawn
 var bot_director: BotDirector
 var spawns: Dictionary = {}
-var colliders: Array[AABB] = []
+var world: CollisionWorld = null
+# Reused by every shot this instance traces, so firing allocates nothing.
+var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
 
 var _tick: int = 0
@@ -86,15 +88,38 @@ func _init(cfg: Dictionary = {}) -> void:
 
 
 func setup_map() -> void:
-	var map_def: Dictionary = ParkourMap.definition()
-	var compiled := MapEngine.compile(map_def)
-	colliders = MapBuilder.build_colliders(compiled)
-	MapBuilder.build_physics(self, compiled)
-	spawns = compiled.get("spawns", {})
-	arena_size = compiled.get("arena", 28.0)
-	bot_director.configure(colliders, arena_size, spawns)
+	if MapCatalog.is_community(map_id):
+		_setup_community_map()
+	else:
+		_setup_builtin_map()
+	bot_director.configure(world, arena_size, spawns)
 
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
+
+
+func _setup_builtin_map() -> void:
+	var map_def: Dictionary = ParkourMap.definition()
+	var compiled := MapEngine.compile(map_def)
+	world = MapBuilder.build_world(compiled)
+	MapBuilder.build_physics(self, compiled)
+	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
+	arena_size = compiled.get("arena", 28.0)
+
+
+func _setup_community_map() -> void:
+	var level := MapCatalog.load_community(map_id)
+	if not level.ok():
+		push_error("[server] %s did not import (%s); falling back to parkour" % [
+			map_id, ", ".join(level.warnings)])
+		_setup_builtin_map()
+		return
+	for w: String in level.warnings:
+		print("[server] %s: %s" % [map_id, w])
+	world = level.world
+	spawns = level.spawns
+	arena_size = level.arena
+	print("[server] %s: %d brushes, %d spawns" % [
+		map_id, world.brush_count(), level.spawn_count()])
 
 
 func tick(dt: float) -> void:
@@ -225,7 +250,8 @@ func handle_set_team(peer_id: int, new_team: int) -> void:
 
 # ── State updates from client ────────────────────────────────────────────
 
-func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool) -> void:
+func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool,
+		grounded: bool) -> void:
 	if not pawns.has(peer_id):
 		return
 	var pawn: ServerPawn = pawns[peer_id]
@@ -235,6 +261,7 @@ func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched
 	pawn.yaw = yaw
 	pawn.pitch = pitch
 	pawn.crouched = crouched
+	pawn.grounded = grounded
 
 
 # ── Combat ───────────────────────────────────────────────────────────────
@@ -407,6 +434,8 @@ func build_snap() -> PackedByteArray:
 		var flags := 0
 		if pawn_ref != null and pawn_ref.alive:
 			flags |= Protocol.PFLG_ALIVE
+		if pawn_ref and pawn_ref.grounded:
+			flags |= Protocol.PFLG_GROUNDED
 		if pawn_ref and pawn_ref.crouched:
 			flags |= Protocol.PFLG_CROUCHED
 		if pawn_ref and _is_protected(pawn_ref):
@@ -849,16 +878,21 @@ func _spawn_pawn(pid: int, protection_ms: float = SPAWN_PROTECTION_MS) -> void:
 		return
 
 	var team_key := "blue" if p.team == Protocol.TEAM_BLUE else "red"
-	var spawn_list: Array = spawns.get(team_key, [[0.0, 0.0]])
-	var pick: Array = spawn_list[randi() % spawn_list.size()]
-	var sx: float = float(pick[0]) + (randf() - 0.5) * 1.4
-	var sz: float = float(pick[1]) + (randf() - 0.5) * 1.4
-	var yaw := 180.0 if p.team == Protocol.TEAM_BLUE else 0.0
+	var fallback := [{"position": Vector3.ZERO, "yaw": 180.0 if p.team == Protocol.TEAM_BLUE else 0.0}]
+	var spawn_list: Array = spawns.get(team_key, fallback)
+	if spawn_list.is_empty():
+		spawn_list = fallback
+	var pick: Dictionary = spawn_list[randi() % spawn_list.size()]
+	var at: Vector3 = pick["position"]
+	# Scatter across the point so two players spawning together do not arrive
+	# inside one another, but only horizontally: nudging the height would drop
+	# someone through a platform or float them above it.
+	var jitter := Vector3((randf() - 0.5) * 1.4, 0.0, (randf() - 0.5) * 1.4)
 
 	var pawn := ServerPawn.new()
 	pawn.participant_id = pid
-	pawn.position = Vector3(sx, 0.0, sz)
-	pawn.yaw = yaw
+	pawn.position = at + jitter
+	pawn.yaw = float(pick["yaw"])
 	pawn.hp = 100
 	pawn.alive = true
 	pawn.protected_until = _now + protection_ms / 1000.0
@@ -981,35 +1015,15 @@ func _chat_allowed(peer_id: int) -> bool:
 
 func _raycast_world(origin: Vector3, dir: Vector3, max_dist: float,
 		punch_cover: bool = false) -> float:
-	var hit_dist := max_dist
-	for box in colliders:
-		if punch_cover and not Hitbox.special_blocks(box):
-			continue
-		var t := _ray_aabb(origin, dir, box)
-		if t > 0.0 and t < hit_dist:
-			hit_dist = t
-	return hit_dist
+	if world == null:
+		return max_dist
+	# Against brushes rather than their bounding boxes, so a shot over a ramp
+	# reaches what is behind it instead of stopping on the empty air above the
+	# slope. The special beam only sees brushes tall enough to stop it.
+	var mask := CollisionWorld.MASK_SPECIAL if punch_cover else CollisionWorld.MASK_SOLID
+	return world.ray_distance(origin, dir.normalized(), max_dist, _shot_trace, mask)
 
 
-func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:
-	var tmin := -1e20
-	var tmax := 1e20
-	for i in 3:
-		if absf(dir[i]) < 1e-8:
-			if origin[i] < box.position[i] or origin[i] > box.end[i]:
-				return -1.0
-		else:
-			var t1 := (box.position[i] - origin[i]) / dir[i]
-			var t2 := (box.end[i] - origin[i]) / dir[i]
-			if t1 > t2:
-				var tmp := t1
-				t1 = t2
-				t2 = tmp
-			tmin = maxf(tmin, t1)
-			tmax = minf(tmax, t2)
-			if tmin > tmax:
-				return -1.0
-	return tmin if tmin > 0.0 else -1.0
 
 
 func _yaw_dir(yaw_deg: float) -> Vector3:

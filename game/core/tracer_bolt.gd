@@ -80,7 +80,9 @@ func _make_segment(radius: float, color: Color, emission: float) -> MeshInstance
 	mat.emission = Color(color.r, color.g, color.b)
 	mat.emission_energy_multiplier = emission
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.no_depth_test = true
+	# Depth testing stays on. With it off the bolt painted over every surface in
+	# front of it, so a shot fired in the next room was visible through the wall
+	# between.
 	cyl.material = mat
 	mi.mesh = cyl
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF

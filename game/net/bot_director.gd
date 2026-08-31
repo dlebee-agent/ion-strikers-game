@@ -47,7 +47,7 @@ var _homes: Dictionary = {}  # team → Vector3
 
 ## Called once the map is compiled. Everything the bots reason about — what is
 ## solid, what is walkable, where each side lives — is derived here.
-func configure(colliders: Array[AABB], arena: float, spawns: Dictionary) -> void:
+func configure(world: CollisionWorld, arena: float, spawns: Dictionary) -> void:
 	_arena_size = arena
 	_homes.clear()
 
@@ -57,15 +57,15 @@ func configure(colliders: Array[AABB], arena: float, spawns: Dictionary) -> void
 		if points.is_empty():
 			continue
 		var sum := Vector3.ZERO
-		for entry: Array in points:
-			var pos := Vector3(float(entry[0]), 0.0, float(entry[1]))
+		for entry: Dictionary in points:
+			var pos: Vector3 = entry["position"]
 			seeds.append(pos)
 			sum += pos
 		var team_val := Protocol.TEAM_BLUE if key == "blue" else Protocol.TEAM_RED
 		_homes[team_val] = sum / float(points.size())
 
 	nav = BotNav.new()
-	nav.build(colliders, arena, seeds)
+	nav.build(world, arena, seeds)
 
 
 # ── roster ───────────────────────────────────────────────────────────────
@@ -537,29 +537,17 @@ func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -
 	var nx := pawn.position.x + dir.x * BOT_SPEED * dt
 	var nz := pawn.position.z + dir.z * BOT_SPEED * dt
 
-	for box in nav.colliders:
-		if box.end.y <= feet + STEP_UP:
-			continue  # low enough to walk up onto
-		if box.position.y >= feet + BODY_HEIGHT:
-			continue  # hangs overhead
-		if nx <= box.position.x - PLAYER_R or nx >= box.end.x + PLAYER_R:
-			continue
-		if nz <= box.position.z - PLAYER_R or nz >= box.end.z + PLAYER_R:
-			continue
-
-		var push_left := (nx + PLAYER_R) - box.position.x
-		var push_right := box.end.x - (nx - PLAYER_R)
-		var push_front := (nz + PLAYER_R) - box.position.z
-		var push_back := box.end.z - (nz - PLAYER_R)
-		var least := minf(push_left, minf(push_right, minf(push_front, push_back)))
-		if least == push_left:
-			nx = box.position.x - PLAYER_R
-		elif least == push_right:
-			nx = box.end.x + PLAYER_R
-		elif least == push_front:
-			nz = box.position.z - PLAYER_R
-		else:
-			nz = box.end.z + PLAYER_R
+	if nav.world != null:
+		# Push out of anything the bot would walk into, using a body that starts
+		# a step above the feet. Whatever is below that is something they walk up
+		# onto rather than something that stops them, which is the exemption the
+		# box version made by skipping low boxes outright.
+		var clearance := BODY_HEIGHT - STEP_UP
+		var half := Vector3(PLAYER_R, clearance * 0.5, PLAYER_R)
+		var push := nav.world.depenetrate(Vector3(nx, feet + STEP_UP + half.y, nz), half)
+		# Horizontal only: how high the bot ends up is settled by surface_at below.
+		nx += push.x
+		nz += push.z
 
 	var lim := _arena_size - 0.8
 	nx = clampf(nx, -lim, lim)
@@ -572,12 +560,15 @@ func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -
 	if support >= feet:
 		feet = support
 		ai["vy"] = 0.0
+		pawn.grounded = true
 	else:
 		var vy := float(ai["vy"]) - FALL_ACCEL * dt
 		feet += vy * dt
+		pawn.grounded = false
 		if feet <= support:
 			feet = support
 			vy = 0.0
+			pawn.grounded = true
 		ai["vy"] = vy
 
 	pawn.position = Vector3(nx, feet, nz)

@@ -61,7 +61,11 @@ func update(dt: float) -> void:
 		if queued_release or _special_charge_time >= SPECIAL_AUTO_FIRE:
 			_finish_special()
 
-func try_fire(origin: Vector3, direction: Vector3, colliders: Array[AABB]) -> void:
+# Reused by every shot, so firing allocates nothing.
+var _shot_trace := TraceResult.new()
+
+
+func try_fire(origin: Vector3, direction: Vector3, world: CollisionWorld) -> void:
 	if _fire_cooldown > 0.0 or _special_charging:
 		return
 	_fire_cooldown = FIRE_DELAY
@@ -69,7 +73,7 @@ func try_fire(origin: Vector3, direction: Vector3, colliders: Array[AABB]) -> vo
 	fired.emit()
 	var muzzle := _muzzle_point(origin, direction)
 	play_laser(muzzle)
-	_spawn_tracer(origin, muzzle, direction, colliders)
+	_spawn_tracer(origin, muzzle, direction, world)
 
 func play_laser(origin: Vector3) -> void:
 	if _laser_pool.is_empty():
@@ -137,62 +141,47 @@ func _muzzle_point(origin: Vector3, direction: Vector3) -> Vector3:
 	return origin + dir * MUZZLE_FORWARD + Vector3(0.0, -MUZZLE_DOWN, 0.0)
 
 
-func _spawn_tracer(origin: Vector3, muzzle: Vector3, direction: Vector3, colliders: Array[AABB]) -> void:
+func _spawn_tracer(origin: Vector3, muzzle: Vector3, direction: Vector3, world: CollisionWorld) -> void:
 	var dir := direction.normalized()
-	var hit_dist := raycast_distance(origin, dir, colliders)
-	var impact_from_muzzle := maxf(0.0, hit_dist - MUZZLE_FORWARD)
 	var scene := get_tree().current_scene
 	if not scene:
 		return
 
+	# The shot is traced along the aim line, from the eye, because that is the
+	# line the server scores it on. The bolt is drawn from the muzzle, which sits
+	# forward of and below the eye, so it has to be aimed at the impact point
+	# rather than fired along a parallel line. Taking the aim distance and
+	# subtracting the forward offset gave a streak that stayed parallel to the
+	# aim line, which is how bolts ended up carrying on through walls the shot
+	# had already stopped at.
+	var impact := origin + dir * raycast_distance(origin, dir, world)
+	var to_impact := impact - muzzle
+	var travel := to_impact.length()
+	var bolt_dir := to_impact / travel if travel > 0.0001 else dir
+
 	# Nothing worth drawing at point-blank range, but the hit itself still has to
 	# register: the flash goes off without a streak in front of it.
-	if impact_from_muzzle <= TracerBolt.BOLT_START:
-		ImpactFlash.spawn(scene, muzzle + dir * impact_from_muzzle,
+	if travel <= TracerBolt.BOLT_START:
+		ImpactFlash.spawn(scene, impact,
 			TracerBolt.glow_color(team), TracerBolt.bolt_color(team), false)
 		return
 
-	TracerBolt.spawn(scene, muzzle, dir, impact_from_muzzle, team)
+	TracerBolt.spawn(scene, muzzle, bolt_dir, travel, team)
 
 
-func raycast_distance(origin: Vector3, dir: Vector3, colliders: Array[AABB]) -> float:
-	return _raycast_colliders(origin, dir, colliders, 200.0, false)
+func raycast_distance(origin: Vector3, dir: Vector3, world: CollisionWorld) -> float:
+	return _trace_world(origin, dir, world, 200.0, CollisionWorld.MASK_SOLID)
 
 
-func raycast_special(origin: Vector3, dir: Vector3, colliders: Array[AABB],
+func raycast_special(origin: Vector3, dir: Vector3, world: CollisionWorld,
 		max_dist: float) -> float:
-	return _raycast_colliders(origin, dir, colliders, max_dist, true)
+	return _trace_world(origin, dir, world, max_dist, CollisionWorld.MASK_SPECIAL)
 
 
-func _raycast_colliders(origin: Vector3, dir: Vector3, colliders: Array[AABB],
-		max_dist: float, punch_cover: bool) -> float:
-	var hit_dist := max_dist
-	for box in colliders:
-		if punch_cover and not Hitbox.special_blocks(box):
-			continue
-		var t := _ray_aabb(origin, dir, box)
-		if t > 0.0 and t < hit_dist:
-			hit_dist = t
-	return hit_dist
-
-func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:
-	var tmin := -1e20
-	var tmax := 1e20
-
-	for i in 3:
-		if absf(dir[i]) < 1e-8:
-			if origin[i] < box.position[i] or origin[i] > box.end[i]:
-				return -1.0
-		else:
-			var t1 := (box.position[i] - origin[i]) / dir[i]
-			var t2 := (box.end[i] - origin[i]) / dir[i]
-			if t1 > t2:
-				var tmp := t1
-				t1 = t2
-				t2 = tmp
-			tmin = maxf(tmin, t1)
-			tmax = minf(tmax, t2)
-			if tmin > tmax:
-				return -1.0
-
-	return tmin if tmin > 0.0 else -1.0
+# Against brushes rather than their bounding boxes, so a tracer over a ramp ends
+# where the slope actually is instead of in the air above it.
+func _trace_world(origin: Vector3, dir: Vector3, world: CollisionWorld,
+		max_dist: float, mask: int) -> float:
+	if world == null:
+		return max_dist
+	return world.ray_distance(origin, dir.normalized(), max_dist, _shot_trace, mask)

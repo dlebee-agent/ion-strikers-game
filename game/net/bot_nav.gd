@@ -3,7 +3,7 @@ extends RefCounted
 
 ## Per-map sight and walk data, built once and shared by every bot on it.
 ##
-## Both halves come off the same AABB list the hitscan shoots against, so a bot
+## Both halves come off the same brush world the hitscan shoots against, so a bot
 ## can never believe it sees a target the laser cannot reach, and never plan a
 ## route the collision resolver will refuse to walk.
 
@@ -14,6 +14,13 @@ const STEP_UP := 0.35
 ## Bots do not jump, so anything taller than this is a one-way drop they take
 ## rather than a ledge they could ever come back up.
 const MAX_DROP := 2.6
+## Mirrors Movement.MIN_WALK_NORMAL: shallower than this is a wall, not a floor.
+const MIN_WALK_NORMAL := 0.7
+## Levels to look through in one column before giving up on it.
+const MAX_LAYERS := 8
+## Half-thickness of the pad surface_at drops, thin enough to read a surface
+## height without catching on anything beside it.
+const PAD_HALF_HEIGHT := 0.02
 const BODY_HEIGHT := 1.7
 const WALK_SAMPLE := 0.45
 
@@ -22,7 +29,7 @@ const NEIGHBORS: Array[Vector2i] = [
 	Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
 ]
 
-var colliders: Array[AABB] = []
+var world: CollisionWorld = null
 var arena: float = 28.0
 ## Every cell a bot can stand on and reach, as world positions. Roam goals are
 ## drawn from here so a wandering bot never picks a spot inside a wall.
@@ -30,31 +37,40 @@ var open_points: PackedVector3Array = PackedVector3Array()
 
 var _dim: int = 0
 var _height: PackedFloat32Array = PackedFloat32Array()
+## The surface normal under each cell. A rise bigger than a step is only
+## walkable along a slope's own gradient, and the full normal is what says which
+## way that runs.
+var _normal: PackedVector3Array = PackedVector3Array()
+var _probe := TraceResult.new()
 var _open: PackedByteArray = PackedByteArray()
 var _astar: AStar3D = null
 
 
-func build(p_colliders: Array[AABB], p_arena: float, seeds: Array[Vector3]) -> void:
-	colliders = p_colliders
+func build(p_world: CollisionWorld, p_arena: float, seeds: Array[Vector3]) -> void:
+	world = p_world
 	arena = p_arena
 	_dim = int(floor(arena * 2.0 / CELL)) + 1
 
 	var count := _dim * _dim
 	_height = PackedFloat32Array()
 	_height.resize(count)
+	_normal = PackedVector3Array()
+	_normal.resize(count)
 	_open = PackedByteArray()
 	_open.resize(count)
 
 	for iz in _dim:
 		for ix in _dim:
 			var idx := iz * _dim + ix
-			var h := _standable_height(_axis_world(ix), _axis_world(iz))
-			if h == -INF:
+			var found := _standable(_axis_world(ix), _axis_world(iz))
+			if found.is_empty():
 				_open[idx] = 0
 				_height[idx] = 0.0
+				_normal[idx] = Vector3.UP
 			else:
 				_open[idx] = 1
-				_height[idx] = h
+				_height[idx] = found[0]
+				_normal[idx] = found[1]
 
 	_prune_to_reachable(seeds)
 	_build_graph()
@@ -65,66 +81,27 @@ func build(p_colliders: Array[AABB], p_arena: float, seeds: Array[Vector3]) -> v
 ## True when map geometry sits between the two points. Exact segment-vs-box,
 ## not a sampled one: a sample-based test walks straight past a thin wall.
 func blocked(from: Vector3, to: Vector3) -> bool:
-	var d := to - from
-	var lo := Vector3(minf(from.x, to.x), minf(from.y, to.y), minf(from.z, to.z))
-	var hi := Vector3(maxf(from.x, to.x), maxf(from.y, to.y), maxf(from.z, to.z))
-
-	for box in colliders:
-		if box.end.x < lo.x or box.position.x > hi.x:
-			continue
-		if box.end.y < lo.y or box.position.y > hi.y:
-			continue
-		if box.end.z < lo.z or box.position.z > hi.z:
-			continue
-		if _segment_hits(from, d, box):
-			return true
-	return false
+	if world == null:
+		return false
+	world.raycast(from, to, _probe)
+	return _probe.hit()
 
 
-static func _segment_hits(from: Vector3, d: Vector3, box: AABB) -> bool:
-	var t_min := 0.0
-	var t_max := 1.0
-	var lo := box.position
-	var hi := box.end
-
-	for axis in 3:
-		var dd: float = d[axis]
-		var o: float = from[axis]
-		if absf(dd) < 1e-9:
-			if o < lo[axis] or o > hi[axis]:
-				return false
-			continue
-		var t1: float = (lo[axis] - o) / dd
-		var t2: float = (hi[axis] - o) / dd
-		if t1 > t2:
-			var swap := t1
-			t1 = t2
-			t2 = swap
-		t_min = maxf(t_min, t1)
-		t_max = minf(t_max, t2)
-		if t_min > t_max:
-			return false
-
-	return true
-
-
-# ── standing ─────────────────────────────────────────────────────────────
-
-## Top of the tallest box under the footprint that is no higher than `ceiling`.
+## Highest surface under the footprint that is no higher than `ceiling`.
 ## Doubles as the step-up target and the landing height, since both ask the same
 ## question: what is the highest thing within reach of these feet?
 func surface_at(x: float, z: float, ceiling: float) -> float:
-	var best := -INF
-	for box in colliders:
-		var top := box.end.y
-		if top > ceiling or top <= best:
-			continue
-		if x <= box.position.x - BODY_RADIUS or x >= box.end.x + BODY_RADIUS:
-			continue
-		if z <= box.position.z - BODY_RADIUS or z >= box.end.z + BODY_RADIUS:
-			continue
-		best = top
-	return best
+	if world == null:
+		return -INF
+	# A thin pad the width of the body, dropped from the ceiling. Sweeping the
+	# footprint rather than reading bounding box tops is what lets this land
+	# partway up a ramp instead of at its peak.
+	var half := Vector3(BODY_RADIUS, PAD_HALF_HEIGHT, BODY_RADIUS)
+	var basement := world.bounds.position.y - 1.0
+	world.trace_box(Vector3(x, ceiling + half.y, z), Vector3(x, basement, z), half, _probe)
+	if not _probe.hit() or _probe.start_solid:
+		return -INF
+	return _probe.end_pos.y - half.y
 
 
 # ── routing ──────────────────────────────────────────────────────────────
@@ -187,6 +164,7 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 	var dist := sqrt(dx * dx + dz * dz)
 	var steps := maxi(1, int(ceil(dist / WALK_SAMPLE)))
 	var prev := from.y
+	var step_dir := Vector2(dx, dz).normalized() if dist > 0.0001 else Vector2.ZERO
 
 	for s in range(1, steps + 1):
 		var t := float(s) / float(steps)
@@ -194,7 +172,11 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 		if idx < 0 or _open[idx] == 0:
 			return false
 		var h: float = _height[idx]
-		if h - prev > STEP_UP or prev - h > MAX_DROP:
+		if prev - h > MAX_DROP:
+			return false
+		# Same allowance the graph uses, so a route over a ramp is not pulled
+		# straight into one the walk test then rejects.
+		if h - prev > STEP_UP + _slope_rise(_normal[idx], step_dir, WALK_SAMPLE):
 			return false
 		prev = h
 
@@ -217,44 +199,75 @@ func _index_at(x: float, z: float) -> int:
 	return _axis_index(z) * _dim + _axis_index(x)
 
 
-## Highest surface over this column that a standing body actually fits on. Walked
-## from the top down so a catwalk wins over the floor beneath it, but a body
-## squeezed under one still finds the floor.
-func _standable_height(x: float, z: float) -> float:
-	var tops: Array[float] = []
-	for box in colliders:
-		if x < box.position.x or x > box.end.x:
-			continue
-		if z < box.position.z or z > box.end.z:
-			continue
-		if not tops.has(box.end.y):
-			tops.append(box.end.y)
+## Highest surface over this column that a standing body actually fits on, as
+## [feet height, surface normal], or empty when there is nowhere to stand.
+## Walked from the top down so a catwalk wins over the floor beneath it, but a
+## body squeezed under one still finds the floor.
+##
+## This sweeps the body itself rather than reading the tops of bounding boxes.
+## A ramp's bounding box has one top, its peak, so reading that gave every cell
+## along the ramp the same height and made the floor-to-ramp join look like a
+## cliff no bot would step up.
+func _standable(x: float, z: float) -> Array:
+	if world == null:
+		return []
+	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
+	var ceiling := world.bounds.end.y + 1.0
+	var basement := world.bounds.position.y - 1.0
+	var from_y := ceiling
 
-	tops.sort()
-	tops.reverse()
-	for top in tops:
-		if _fits(x, z, top):
-			return top
-	return -INF
+	for _layer in MAX_LAYERS:
+		if from_y <= basement:
+			break
+		world.trace_box(Vector3(x, from_y, z), Vector3(x, basement, z), half, _probe)
+		if not _probe.hit():
+			break
+		var feet := _probe.end_pos.y - half.y
+		if _probe.normal.y >= MIN_WALK_NORMAL and _fits(x, z, feet):
+			return [feet, _probe.normal]
+		# Too steep, or no headroom. Drop under this surface and keep looking.
+		from_y = _probe.end_pos.y - 0.05
+
+	return []
 
 
-## Nothing juts up through the body: anything more than a step above the feet and
-## low enough to be in the way blocks the cell.
+## Nothing overlaps a body standing here.
 func _fits(x: float, z: float, feet: float) -> bool:
-	for box in colliders:
-		if box.end.y <= feet + STEP_UP or box.position.y >= feet + BODY_HEIGHT:
-			continue
-		if x <= box.position.x - BODY_RADIUS or x >= box.end.x + BODY_RADIUS:
-			continue
-		if z <= box.position.z - BODY_RADIUS or z >= box.end.z + BODY_RADIUS:
-			continue
+	if world == null:
 		return false
-	return true
+	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
+	return not world.box_overlaps(Vector3(x, feet + half.y, z), half)
 
 
 func _can_step(from_idx: int, to_idx: int) -> bool:
 	var dh: float = _height[to_idx] - _height[from_idx]
-	return dh <= STEP_UP and dh >= -MAX_DROP
+	if dh < -MAX_DROP:
+		return false
+	if dh <= STEP_UP:
+		return true
+	# A rise taller than a step is only walkable along a slope's own gradient.
+	# Allowing it merely because the destination is sloped lets a bot walk at a
+	# ramp's side wall, since the cell on top of that wall is sloped too, and
+	# they get stuck trying to climb it sideways. What the surface would actually
+	# rise over this step, given which way it tilts, is the test.
+	var fx := from_idx % _dim
+	var fz := from_idx / _dim
+	var tx := to_idx % _dim
+	var tz := to_idx / _dim
+	var step := Vector2(tx - fx, tz - fz)
+	if step.length_squared() < 0.0001:
+		return false
+	return dh <= STEP_UP + _slope_rise(_normal[to_idx], step.normalized(), CELL * step.length())
+
+
+## How far the surface climbs over a step of `run` metres in horizontal direction
+## `dir`, given its normal. Negative going downhill, zero across the gradient.
+static func _slope_rise(normal: Vector3, dir: Vector2, run: float) -> float:
+	if normal.y < 0.001:
+		return 0.0
+	# The normal leans downhill, so the height gained going `dir` is the
+	# opposite of its lean along `dir`, scaled by how steeply it tilts.
+	return -run * (normal.x * dir.x + normal.z * dir.y) / normal.y
 
 
 ## Diagonals may not clip a corner: both orthogonal cells have to be walkable
