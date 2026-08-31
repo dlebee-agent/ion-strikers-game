@@ -78,7 +78,7 @@ static func normalize_spawns(flat: Dictionary) -> Dictionary:
 # A stand-in for the compiled dictionary the built-in maps produce, so imported
 # levels get the same lighting and sky treatment without inventing a second one.
 static func ambience_for(level: TbLevel) -> Dictionary:
-	return {
+	var out: Dictionary = {
 		"arena": level.arena,
 		"theme": {
 			"floor": 0x2a3240,
@@ -87,13 +87,21 @@ static func ambience_for(level: TbLevel) -> Dictionary:
 			"cover": 0x8aa0b4,
 			"fog": 0x1e262e,
 		},
-		"sky": {
-			"cubemap": {
-				"seed": 17,
-				"stars": 3200,
-				"galaxies": 6,
-				"density": 0.48,
-				"nebula": [0x2b3fa8, 0x1a70a8, 0x6a2ab0, 0xd0763a],
-			},
-		},
 	}
+	# A sky is only offered when its faces are already baked on disk. The
+	# procedural generator is an offline tool: asked for a cubemap it has not
+	# got, it spends about twenty seconds building one, and doing that while a
+	# match is connecting stalls the client long enough for the server to drop
+	# it. Without a sky the environment falls back to a flat background, which
+	# is plain but instant.
+	if has_baked_sky(level.sky_id):
+		out["id"] = level.sky_id
+		out["sky"] = {"cubemap": {}}
+	return out
+
+
+static func has_baked_sky(sky_id: String) -> bool:
+	for i in 6:
+		if not ResourceLoader.exists("res://maps/sky_%s_%d.png" % [sky_id, i]):
+			return false
+	return true

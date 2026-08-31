@@ -38,6 +38,7 @@ static func import_file(map_path: String, wad_path := "") -> TbLevel:
 		return level
 
 	level.name = world_entity.get_string("message", level.id)
+	level.sky_id = world_entity.get_string("sky", "parkour")
 
 	# Geometry. Brushes on any entity count as solid: a func_detail or a
 	# func_group is a mapper's organisational device, not a different kind of

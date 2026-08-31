@@ -17,6 +17,11 @@ var colliders: Array[AABB] = []
 # Team name to an array of {"position": Vector3, "yaw": float}.
 var spawns: Dictionary = {}
 var pads: Array = []
+# Which baked sky set to use, from worldspawn's `sky` key. Baked only: the
+# procedural generator takes the better part of a minute for one cubemap, which
+# is fine as an offline bake and fatal in the middle of a connect.
+var sky_id := "parkour"
+
 # Half the level's larger horizontal extent, which is what the systems built
 # around a square arena expect.
 var arena := 0.0
