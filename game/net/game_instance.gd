@@ -109,7 +109,6 @@ func _setup_builtin_map() -> void:
 	var map_def: Dictionary = ParkourMap.definition()
 	var compiled := MapEngine.compile(map_def)
 	world = MapBuilder.build_world(compiled)
-	MapBuilder.build_physics(self, compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
 	arena_size = compiled.get("arena", 28.0)
 

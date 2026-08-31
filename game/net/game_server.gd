@@ -1,8 +1,28 @@
 extends Node
 
+signal bind_failed(err: int)
+
 var _host: ENetConnection
 var _registry: GameRegistry
 var _port: int = 7777
+
+## When true, bind failure calls get_tree().quit(1) instead of emitting
+## bind_failed. Set for real dedicated server processes; left false when
+## the server is hosted in-process by the client.
+var standalone: bool = false
+
+## IP to bind ENet on. Standalone servers use "0.0.0.0"; in-process local
+## servers use "127.0.0.1" to avoid Windows firewall prompts.
+var bind_ip: String = "0.0.0.0"
+
+## When true, try a range of ports starting at _port before giving up.
+var allow_port_search: bool = false
+
+## The port that was actually bound (may differ from _port when port search
+## is enabled and the requested port was busy).
+var actual_port: int = 0
+
+const PORT_SEARCH_RANGE := 32
 
 # peer_id → { enet_peer, game_instance, authed }
 var _sessions: Dictionary = {}
@@ -100,16 +120,48 @@ func release_instance(game_id: String, reason: String = "") -> bool:
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	get_registry()
 
-	_host = ENetConnection.new()
-	var err := _host.create_host_bound("0.0.0.0", _port, 32, Protocol.MAX_CHANNELS)
+	var err := _bind_host()
 	if err != OK:
-		push_error("ENet bind failed on port %d: %s" % [_port, error_string(err)])
-		get_tree().quit(1)
+		if standalone:
+			get_tree().quit(1)
+		else:
+			bind_failed.emit(err)
 		return
 
-	print("[server] listening on 0.0.0.0:%d (empty registry)" % _port)
+	print("[server] listening on %s:%d (empty registry)" % [bind_ip, actual_port])
+
+
+func _exit_tree() -> void:
+	if _host != null:
+		_host.destroy()
+		_host = null
+	if _registry != null:
+		for gid: String in _registry.instances.keys():
+			var inst: GameInstance = _registry.instances[gid]
+			if is_instance_valid(inst):
+				inst.free()
+		_registry.instances.clear()
+	_sessions.clear()
+
+
+func _bind_host() -> int:
+	var attempts := PORT_SEARCH_RANGE if allow_port_search else 1
+	for offset in attempts:
+		var candidate := _port + offset
+		var host := ENetConnection.new()
+		var err := host.create_host_bound(bind_ip, candidate, 32, Protocol.MAX_CHANNELS)
+		if err == OK:
+			_host = host
+			actual_port = candidate
+			if candidate != _port and allow_port_search:
+				print("[server] port %d busy, listening on %d instead" % [_port, candidate])
+			return OK
+		host.destroy()
+	push_error("ENet bind failed on %s:%d (searched %d ports)" % [bind_ip, _port, attempts])
+	return ERR_CANT_CREATE
 
 
 func _process(dt: float) -> void:

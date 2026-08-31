@@ -1385,7 +1385,7 @@ func _on_launch() -> void:
 		_connecting = false
 		return
 
-	await get_tree().create_timer(0.6).timeout
+	await get_tree().process_frame
 	if not is_inside_tree():
 		_cleanup_launch()
 		return

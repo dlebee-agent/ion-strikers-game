@@ -53,6 +53,7 @@ func _start_server(args: PackedStringArray) -> void:
 	var server_scene := load("res://net/game_server.gd")
 	var server_node: Node = server_scene.new()
 	server_node.name = "GameServer"
+	server_node.standalone = true
 	server_node.configure(port, parent_pid, admin_password)
 	server_node.set_max_lobbies(max_lobbies)
 
