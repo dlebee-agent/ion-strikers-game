@@ -4,6 +4,9 @@ const BUILTIN_MAPS: Array[Dictionary] = [
 	{"id": "parkour", "name": "Parkour Yard", "desc": "Mirrored stairs & jump blocks. Movement + jump test bed."},
 ]
 
+const MenuStage = preload("res://scenes/menu/menu_stage.gd")
+const _GameApiClient = preload("res://net/game_api.gd")
+
 
 # Built-in maps plus whatever .map files are sitting in maps/community. The
 # community ones are imported to read their name, which also surfaces a broken
@@ -21,8 +24,6 @@ static func map_entries() -> Array[Dictionary]:
 				level.world.brush_count(), level.spawn_count()],
 		})
 	return out
-const MenuStage = preload("res://scenes/menu/menu_stage.gd")
-const _GameApiClient = preload("res://net/game_api.gd")
 
 var callsign_screen: Control
 var home_screen: Control
@@ -1248,9 +1249,13 @@ func _make_lobby_row(game: Dictionary) -> Control:
 
 
 func _map_label(map_id: String) -> String:
-	for m in MAPS:
+	# map_entries() rather than the built-in list, so a hosted game running a
+	# community map shows its name instead of its raw id.
+	for m in map_entries():
 		if str(m["id"]) == map_id:
 			return str(m["name"])
+	if MapCatalog.is_community(map_id):
+		return MapCatalog.display_name(map_id)
 	return map_id if not map_id.is_empty() else "—"
 
 
