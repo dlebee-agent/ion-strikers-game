@@ -56,6 +56,9 @@ var _trace := TraceResult.new()
 var _slide_pos := Vector3.ZERO
 var _slide_vel := Vector3.ZERO
 var _slide_blocked := false
+# Set for the one frame a jump is launched. Rising velocity alone cannot mean
+# airborne, because climbing a slope produces exactly that.
+var _jumped := false
 
 func eye_height() -> float:
 	return lerpf(EYE_STAND, EYE_CROUCH, crouch_fraction)
@@ -94,6 +97,7 @@ func update(dt: float, wish_forward: float, wish_side: float, want_jump: bool,
 			velocity.y = JUMP_VEL
 			on_ground = false
 			jump_latch = true
+			_jumped = true
 		else:
 			_apply_friction(dt)
 			_accelerate(wish_dir, wish_speed, ACCEL, dt)
@@ -211,6 +215,7 @@ func _move_and_collide(dt: float, world: CollisionWorld) -> void:
 	velocity = best_vel
 
 	_settle_ground(world, half, was_on_ground)
+	_jumped = false
 
 
 # How far a candidate move actually carried the player across the floor. The
@@ -265,7 +270,12 @@ func _sweep(world: CollisionWorld, half: Vector3, from: Vector3, to: Vector3) ->
 # move above and has to be probed for.
 func _settle_ground(world: CollisionWorld, half: Vector3, was_on_ground: bool) -> void:
 	on_ground = false
-	if velocity.y > 0.01:
+	# Only a jump gives up the ground. Rising velocity does not, because walking
+	# up a slope produces rising velocity every frame: the slide clips motion to
+	# the slope, which tilts it upward. Reading that as airborne un-grounds the
+	# player, gravity pulls them back down, and they re-ground the next frame,
+	# which feels like slipping the whole way up.
+	if _jumped:
 		return
 
 	# An already grounded player probes a full step down, which walks them onto
@@ -282,5 +292,8 @@ func _settle_ground(world: CollisionWorld, half: Vector3, was_on_ground: bool) -
 
 	position = landed
 	on_ground = true
-	if velocity.y < 0.0:
-		velocity.y = 0.0
+	# Lay velocity along whatever is underfoot, so none of it points into the
+	# surface or off it. On flat ground that zeroes the vertical component, as
+	# before; on a slope it leaves exactly the along-slope motion that carries
+	# the player up or down it.
+	velocity = velocity.slide(_trace.normal)

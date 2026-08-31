@@ -167,6 +167,72 @@ func _initialize() -> void:
 	_ok("nobody falls through the world", fell_through, 0)
 	_ok("nobody lands embedded", stuck, 0)
 
+	_slopes()
+
 	print("")
 	print("FAILURES: %d" % _fails)
 	quit(1 if _fails > 0 else 0)
+
+
+# The built-in maps are all boxes, so slope behaviour can only be exercised on
+# imported brush geometry.
+func _slopes() -> void:
+	print("-- climbing slopes (community arena) --")
+	var level := MapCatalog.load_community("community/arena1")
+	if not level.ok():
+		print("    (arena did not import, skipped)")
+		return
+	_world = level.world
+
+	# Find somewhere with real slope underfoot rather than assuming where the
+	# ramps are.
+	var res := TraceResult.new()
+	var half := Vector3(Movement.PLAYER_RADIUS, Movement.STAND_HEIGHT * 0.5, Movement.PLAYER_RADIUS)
+	# The lowest bit of slope on the map, so the climb is as long as the level
+	# has to offer rather than whatever the scan happened to reach first.
+	var found := Vector3.ZERO
+	var found_normal := Vector3.ZERO
+	var lowest := INF
+	var x := level.bounds.position.x + 1.0
+	while x < level.bounds.end.x:
+		var z := level.bounds.position.z + 1.0
+		while z < level.bounds.end.z:
+			_world.trace_box(Vector3(x, level.bounds.end.y, z),
+				Vector3(x, level.bounds.position.y, z), half, res)
+			if res.hit() and res.normal.y > 0.72 and res.normal.y < 0.99:
+				var feet := res.end_pos - Vector3(0.0, half.y, 0.0)
+				if feet.y < lowest:
+					lowest = feet.y
+					found = feet
+					found_normal = res.normal
+			z += 0.5
+		x += 0.5
+	if found_normal == Vector3.ZERO:
+		print("    (no walkable slope found, skipped)")
+		return
+	print("    slope at %s, normal %s (%.0f degrees)" % [found, found_normal,
+		rad_to_deg(acos(found_normal.y))])
+
+	var m := Movement.new()
+	m.position = found
+	# The normal leans downhill, so the way up is the other way.
+	var uphill := -Vector3(found_normal.x, 0.0, found_normal.z).normalized()
+	# Forward at yaw 0 is -Z, and yaw turns anticlockwise about Y.
+	m.yaw = rad_to_deg(atan2(-uphill.x, -uphill.z))
+	for i in 30:
+		m.update(DT, 0.0, 0.0, false, false, false, _world)
+	var base := m.position.y
+
+	var airborne := 0
+	for i in 90:
+		m.update(DT, 1.0, 0.0, false, false, false, _world)
+		if not m.on_ground:
+			airborne += 1
+	_ok("gains height walking up", m.position.y - base > 0.25, true)
+	# Climbing used to un-ground the player on every single frame, because
+	# clipping motion to the slope tilts velocity upward and that was read as
+	# leaving the ground. A handful of frames at the crest is a different thing:
+	# running off the top of a ramp onto the flat does launch you a little, and
+	# is meant to.
+	_ok("no longer stutters the whole way up", airborne < 15, true)
+	_ok("is not embedded in the ramp", _embedded(m), false)

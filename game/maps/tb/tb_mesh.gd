@@ -69,4 +69,9 @@ static func _add_face(st: SurfaceTool, face: TbGeometry.FaceGeometry,
 # collide, which is how a clip brush does its job: invisible, but solid.
 static func add_to_world(solids: Array[TbGeometry.Solid], world: CollisionWorld) -> void:
 	for solid: TbGeometry.Solid in solids:
-		world.add_brush(solid.planes, solid.bounds)
+		var index := world.add_brush(solid.planes, solid.bounds)
+		# Whether a brush stops the special beam is judged on its extents, the
+		# same test the built-in maps use, so imported cover behaves like
+		# hand-built cover without a mapper having to mark anything.
+		if Hitbox.special_blocks(solid.bounds):
+			world.tag_brush(index, CollisionWorld.CONTENT_SPECIAL)

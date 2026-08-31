@@ -308,7 +308,7 @@ func _spawn_special_beam() -> void:
 
 	var eye := camera_rig.get_aim_origin()
 	var dir := camera_rig.get_aim_direction()
-	var dist := weapon.raycast_special(eye, dir, _colliders, SPECIAL_RANGE)
+	var dist := weapon.raycast_special(eye, dir, _world, SPECIAL_RANGE)
 	var impact := eye + dir * dist
 	var first_person := camera_rig.mode == CameraRig.Mode.FIRST_PERSON
 	SpecialBeam.spawn(scene, _beam_origin(eye, dir, impact, first_person), impact,
@@ -400,7 +400,7 @@ func process_input(dt: float) -> void:
 
 	if InputBinds.is_action_pressed("fire"):
 		weapon.try_fire(camera_rig.get_aim_origin(), camera_rig.get_aim_direction(),
-			_colliders)
+			_world)
 
 	# Auto-fire while held; melee is one punch per press so holding it does not
 	# machine-gun once the cooldown lapses.

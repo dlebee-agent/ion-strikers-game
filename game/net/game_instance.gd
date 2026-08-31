@@ -27,6 +27,8 @@ var bot_director: BotDirector
 var spawns: Dictionary = {}
 var colliders: Array[AABB] = []
 var world: CollisionWorld = null
+# Reused by every shot this instance traces, so firing allocates nothing.
+var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
 
 var _tick: int = 0
@@ -1012,35 +1014,15 @@ func _chat_allowed(peer_id: int) -> bool:
 
 func _raycast_world(origin: Vector3, dir: Vector3, max_dist: float,
 		punch_cover: bool = false) -> float:
-	var hit_dist := max_dist
-	for box in colliders:
-		if punch_cover and not Hitbox.special_blocks(box):
-			continue
-		var t := _ray_aabb(origin, dir, box)
-		if t > 0.0 and t < hit_dist:
-			hit_dist = t
-	return hit_dist
+	if world == null:
+		return max_dist
+	# Against brushes rather than their bounding boxes, so a shot over a ramp
+	# reaches what is behind it instead of stopping on the empty air above the
+	# slope. The special beam only sees brushes tall enough to stop it.
+	var mask := CollisionWorld.MASK_SPECIAL if punch_cover else CollisionWorld.MASK_SOLID
+	return world.ray_distance(origin, dir.normalized(), max_dist, _shot_trace, mask)
 
 
-func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:
-	var tmin := -1e20
-	var tmax := 1e20
-	for i in 3:
-		if absf(dir[i]) < 1e-8:
-			if origin[i] < box.position[i] or origin[i] > box.end[i]:
-				return -1.0
-		else:
-			var t1 := (box.position[i] - origin[i]) / dir[i]
-			var t2 := (box.end[i] - origin[i]) / dir[i]
-			if t1 > t2:
-				var tmp := t1
-				t1 = t2
-				t2 = tmp
-			tmin = maxf(tmin, t1)
-			tmax = minf(tmax, t2)
-			if tmin > tmax:
-				return -1.0
-	return tmin if tmin > 0.0 else -1.0
 
 
 func _yaw_dir(yaw_deg: float) -> Vector3:

@@ -17,6 +17,8 @@ var pawn: LocalPawn
 var client: GameClient
 var _colliders: Array[AABB] = []
 var _world: CollisionWorld = null
+# Reused by every tracer, so a firefight allocates nothing.
+var _shot_trace := TraceResult.new()
 var _map_id: String = "parkour"
 var _mode: String = "classic"
 var _my_team: int = 0
@@ -749,10 +751,8 @@ func _on_tracer(msg: Dictionary) -> void:
 	var team_str := "blue" if team_val == Protocol.TEAM_BLUE else "red"
 
 	var hit_dist := 200.0
-	for box in _colliders:
-		var t := _ray_aabb(origin, dir, box)
-		if t > 0.0 and t < hit_dist:
-			hit_dist = t
+	if _world != null:
+		hit_dist = _world.ray_distance(origin, dir.normalized(), hit_dist, _shot_trace)
 
 	TracerBolt.spawn(self, origin, dir.normalized(), hit_dist, team_str)
 

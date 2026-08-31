@@ -30,6 +30,15 @@ const PARALLEL_EPSILON := 0.0001
 # for a player who is merely standing on the ground.
 const TOUCH_EPSILON := 0.0005
 
+# What a brush is made of, so one world can answer different questions. Every
+# solid blocks movement and ordinary shots; only some of them stop the special
+# beam, which punches through low cover but not through a wall.
+const CONTENT_SOLID := 1
+const CONTENT_SPECIAL := 2
+# Traces default to caring about anything solid.
+const MASK_SOLID := CONTENT_SOLID
+const MASK_SPECIAL := CONTENT_SPECIAL
+
 # Planes of every brush, concatenated. A brush owns the slice described by its
 # entry in _brush_first / _brush_count.
 var _plane_normals := PackedVector3Array()
@@ -37,6 +46,7 @@ var _plane_dists := PackedFloat64Array()
 var _brush_first := PackedInt32Array()
 var _brush_count := PackedInt32Array()
 var _brush_bounds: Array[AABB] = []
+var _brush_mask := PackedInt32Array()
 
 # Uniform XZ grid over the brush set. Arena maps are far wider than they are
 # tall, so splitting on Y as well would buy nothing.
@@ -56,14 +66,29 @@ func brush_count() -> int:
 	return _brush_first.size()
 
 
+func bounds_of(index: int) -> AABB:
+	return _brush_bounds[index]
+
+
+# Adds `bits` to a brush's contents, for classification the caller can only make
+# once the brush's own extents are known.
+func tag_brush(index: int, bits: int) -> void:
+	_brush_mask[index] = _brush_mask[index] | bits
+
+
 # Adds a convex hull. `planes` must face outward and enclose a bounded volume;
 # `box` is the hull's own bounds, which the caller already knows from the vertex
 # solve and so is not recomputed here. Returns the brush index.
-func add_brush(planes: Array[Plane], box: AABB) -> int:
+func add_brush(planes: Array[Plane], box: AABB, mask := CONTENT_SOLID) -> int:
 	var index := _brush_first.size()
+	_brush_mask.append(mask)
 	_brush_first.append(_plane_normals.size())
-	_brush_count.append(planes.size())
-	for p: Plane in planes:
+
+	var all := planes.duplicate()
+	_add_bevels(all, box)
+
+	_brush_count.append(all.size())
+	for p: Plane in all:
 		_plane_normals.append(p.normal)
 		_plane_dists.append(p.d)
 	_brush_bounds.append(box)
@@ -73,7 +98,7 @@ func add_brush(planes: Array[Plane], box: AABB) -> int:
 
 
 # Adds an axis-aligned box as a six-plane brush.
-func add_box(box: AABB) -> int:
+func add_box(box: AABB, mask := CONTENT_SOLID) -> int:
 	var lo := box.position
 	var hi := box.end
 	var planes: Array[Plane] = [
@@ -84,13 +109,44 @@ func add_box(box: AABB) -> int:
 		Plane(Vector3(0, 0, 1), hi.z),
 		Plane(Vector3(0, 0, -1), -lo.z),
 	]
-	return add_brush(planes, box)
+	return add_brush(planes, box, mask)
 
 
 # Convenience for the declarative maps, whose compiler still emits AABBs.
-func add_boxes(boxes: Array[AABB]) -> void:
+func add_boxes(boxes: Array[AABB], mask := CONTENT_SOLID) -> void:
 	for b: AABB in boxes:
-		add_box(b)
+		add_box(b, mask)
+
+
+# Adds the six axis-aligned planes a brush does not already have.
+#
+# Pushing a face plane out by the box's reach along its normal is how a moving
+# box becomes a moving point, but that is only exact where the brush's own faces
+# bound it. The true swept volume is the Minkowski sum of the brush and the box,
+# and that sum has faces the brush does not: axis-aligned ones, from the box's
+# own faces. Leaving them out inflates the hull along every sloped edge, so a
+# box near the top of a ramp reads as embedded while sitting in clear air above
+# it, and a player standing there floats a finger's width off the surface.
+#
+# An axis-aligned brush already carries all six, so nothing is added to one and
+# box maps are untouched.
+static func _add_bevels(planes: Array[Plane], box: AABB) -> void:
+	var axes: Array[Plane] = [
+		Plane(Vector3(1, 0, 0), box.end.x),
+		Plane(Vector3(-1, 0, 0), -box.position.x),
+		Plane(Vector3(0, 1, 0), box.end.y),
+		Plane(Vector3(0, -1, 0), -box.position.y),
+		Plane(Vector3(0, 0, 1), box.end.z),
+		Plane(Vector3(0, 0, -1), -box.position.z),
+	]
+	for bevel: Plane in axes:
+		var have := false
+		for p: Plane in planes:
+			if p.normal.dot(bevel.normal) > 0.999:
+				have = true
+				break
+		if not have:
+			planes.append(bevel)
 
 
 func _grow_bounds(box: AABB) -> void:
@@ -157,10 +213,13 @@ static func _sweep_bounds(start: Vector3, target: Vector3, half: Vector3) -> AAB
 
 # Sweeps a box, centred on `start` and moving to `target`, through the world.
 # `half` is the box's half extents. Fills and returns `result`.
-func trace_box(start: Vector3, target: Vector3, half: Vector3, result: TraceResult) -> TraceResult:
+func trace_box(start: Vector3, target: Vector3, half: Vector3, result: TraceResult,
+		mask := MASK_SOLID) -> TraceResult:
 	result.reset(start, target)
 	var sweep := _sweep_bounds(start, target, half)
 	for i: int in _candidates(sweep):
+		if (_brush_mask[i] & mask) == 0:
+			continue
 		if not _brush_bounds[i].intersects(sweep):
 			continue
 		_clip_to_brush(i, start, target, half, result)
@@ -171,8 +230,18 @@ func trace_box(start: Vector3, target: Vector3, half: Vector3, result: TraceResu
 
 
 # Sweeps a zero-size point, i.e. a ray. Used by hitscan.
-func raycast(from: Vector3, to: Vector3, result: TraceResult) -> TraceResult:
-	return trace_box(from, to, Vector3.ZERO, result)
+func raycast(from: Vector3, to: Vector3, result: TraceResult, mask := MASK_SOLID) -> TraceResult:
+	return trace_box(from, to, Vector3.ZERO, result, mask)
+
+
+# Distance along `dir` at which the world stops a ray, or `max_dist` when
+# nothing does. This is the shape hitscan wants: it does not care what it hit.
+func ray_distance(origin: Vector3, dir: Vector3, max_dist: float,
+		result: TraceResult, mask := MASK_SOLID) -> float:
+	raycast(origin, origin + dir * max_dist, result, mask)
+	if not result.hit():
+		return max_dist
+	return result.fraction * max_dist
 
 
 # Clips the sweep against one brush, tightening `result` when this brush stops

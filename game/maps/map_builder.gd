@@ -28,7 +28,10 @@ static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 # over too. Imported .map geometry will add real brushes here rather than boxes.
 static func build_world(compiled: Dictionary) -> CollisionWorld:
 	var world := CollisionWorld.new()
-	world.add_boxes(build_colliders(compiled))
+	for box: AABB in build_colliders(compiled):
+		var index := world.add_box(box)
+		if Hitbox.special_blocks(box):
+			world.tag_brush(index, CollisionWorld.CONTENT_SPECIAL)
 	world.build()
 	return world
 
