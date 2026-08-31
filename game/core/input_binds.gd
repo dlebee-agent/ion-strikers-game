@@ -18,13 +18,14 @@ const BIND_DEFAULTS: Dictionary = {
 	"team_menu": ["M", ""],
 	"chat_all": ["Y", "Enter"],
 	"chat_team": ["U", ""],
+	"spec_swap": ["V", ""],
 }
 
 const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
 	["Combat", ["fire", "melee", "special"]],
 	["Communication", ["chat_all", "chat_team"]],
-	["Interface", ["team_menu", "scoreboard", "controls"]],
+	["Interface", ["team_menu", "scoreboard", "controls", "spec_swap"]],
 ]
 
 const BIND_LABELS: Dictionary = {
@@ -43,6 +44,7 @@ const BIND_LABELS: Dictionary = {
 	"team_menu": "Team menu",
 	"chat_all": "Global message",
 	"chat_team": "Team chat",
+	"spec_swap": "Toggle spectate mode",
 }
 
 const MOUSE_BUTTON_NAMES: Dictionary = {

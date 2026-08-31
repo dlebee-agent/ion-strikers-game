@@ -47,6 +47,10 @@ var _team_btn: Button
 var _keys_btn: Button
 var _settings_btn: Button
 
+var _spec_panel: PanelContainer
+var _spec_who: Label
+var _spec_sub: Label
+
 var _banner_tween: Tween
 var _is_in_stands: bool = true
 var _local_team: int = Protocol.TEAM_NONE
@@ -116,6 +120,7 @@ func _build() -> void:
 	_build_scoreboard()
 	_build_match_over()
 	_build_controls()
+	_build_spec_panel()
 	_build_round_end()
 	_scoreboard.move_to_front()
 	_chat_wrap.move_to_front()
@@ -466,6 +471,55 @@ func _build_controls() -> void:
 		InputBinds.bindings_changed.connect(_on_bindings_changed)
 
 
+func _build_spec_panel() -> void:
+	_spec_panel = PanelContainer.new()
+	_spec_panel.anchor_left = 0.5
+	_spec_panel.anchor_right = 0.5
+	_spec_panel.anchor_top = 1.0
+	_spec_panel.anchor_bottom = 1.0
+	_spec_panel.offset_left = -160.0
+	_spec_panel.offset_right = 160.0
+	_spec_panel.offset_top = -130.0
+	_spec_panel.offset_bottom = -70.0
+	_spec_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.016, 0.031, 0.055, 0.6)
+	st.set_corner_radius_all(10)
+	st.border_color = Color(0.133, 0.2, 0.2, 1.0)
+	st.set_border_width_all(1)
+	st.content_margin_left = 20
+	st.content_margin_right = 20
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	_spec_panel.add_theme_stylebox_override("panel", st)
+
+	var col := VBoxContainer.new()
+	col.alignment = BoxContainer.ALIGNMENT_CENTER
+	col.add_theme_constant_override("separation", 2)
+	col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_spec_panel.add_child(col)
+
+	var header := _label("SPECTATING", 11, Color(1.0, 1.0, 1.0, 0.55))
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if MenuLook:
+		header.add_theme_font_override("font", MenuLook.FONT_MONO)
+	col.add_child(header)
+
+	_spec_who = _label("", 19, Color("#8fd6ff"))
+	if MenuLook:
+		_spec_who.add_theme_font_override("font", MenuLook.FONT_HEADING)
+	_spec_who.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(_spec_who)
+
+	_spec_sub = _label("", 11, Color(1.0, 1.0, 1.0, 0.55))
+	_spec_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(_spec_sub)
+
+	_spec_panel.visible = false
+	_root.add_child(_spec_panel)
+
+
 # ── Public API ───────────────────────────────────────────────────────────
 
 func update_score(blue: int, red: int, round_num: int, mode: String, kill_target: int,
@@ -519,6 +573,24 @@ func set_stands_mode(in_stands: bool, team: int = -1) -> void:
 		return
 	_combat_wrap.visible = not in_stands
 	_crosshair.visible = not in_stands
+
+
+func show_spectator_panel(who: String, sub: String, color: Color = Color("#8fd6ff")) -> void:
+	if not _spec_panel:
+		return
+	_spec_who.text = who
+	_spec_who.add_theme_color_override("font_color", color)
+	_spec_sub.text = sub
+	_spec_panel.visible = true
+
+
+func hide_spectator_panel() -> void:
+	if _spec_panel:
+		_spec_panel.visible = false
+
+
+func set_spectate_crosshair(vis: bool) -> void:
+	_crosshair.visible = vis
 
 
 func show_kill(killer_name: String, victim_name: String, cause: int, head: bool,
@@ -592,6 +664,7 @@ func present_match_over(winner: int, score_blue: int, score_red: int, mode: Stri
 	_match_over_active = true
 	_scoreboard_pinned = true
 	hide_banner()
+	hide_spectator_panel()
 	_combat_wrap.visible = false
 	_crosshair.visible = false
 	_kill_feed.visible = false

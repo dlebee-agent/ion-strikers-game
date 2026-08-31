@@ -6,6 +6,8 @@ const RemotePawn = preload("res://core/remote_pawn.gd")
 const TracerBolt = preload("res://core/tracer_bolt.gd")
 const ImpactFlash = preload("res://core/impact_flash.gd")
 const SpecialBeam = preload("res://core/special_beam.gd")
+const SpectatorCam = preload("res://core/spectator_cam.gd")
+const AnimDriver = preload("res://core/anim_driver.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -29,9 +31,8 @@ var _remotes: Dictionary = {}  # peer_id → RemotePawn
 var _snap_time: float = 0.0
 var _last_snap_players: Array = []
 
-var _camera_rig: CameraRig
-var _orbit_target: int = 0
-var _orbit_idx: int = 0
+var _spectator: SpectatorCam
+var _arena_size: float = 28.0
 var _player_names: Dictionary = {}  # id → name
 
 const METEOR_WARN_LEAD := 2.0
@@ -67,7 +68,9 @@ func _ready() -> void:
 		_player_names[my_init_id] = local_callsign
 
 	_build_map()
-	_setup_spectator_camera()
+	_spectator = SpectatorCam.new()
+	add_child(_spectator)
+	_start_spectate_watch()
 	_build_hud()
 	_build_team_panel()
 
@@ -113,16 +116,11 @@ func _build_map() -> void:
 
 	var compiled := MapEngine.compile(map_def)
 	_colliders = MapBuilder.build_visual(self, compiled)
+	_arena_size = float(compiled.get("arena", 28.0))
 
 
-func _setup_spectator_camera() -> void:
-	_camera_rig = CameraRig.new()
-	var movement := preload("res://core/movement.gd").new()
-	movement.position = Vector3(0, 8, -20)
-	_camera_rig.setup(movement)
-	_camera_rig.set_mode(CameraRig.Mode.THIRD_PERSON)
-	InputSettings.apply_to(_camera_rig)
-	add_child(_camera_rig)
+func _start_spectate_watch() -> void:
+	_spectator.start_watch(_arena_size)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -182,7 +180,7 @@ func _on_team_panel_closed() -> void:
 	if _match_over:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		return
-	if not _in_stands and _alive:
+	if not _in_stands:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		_hud.show_cursor_controls(false)
 
@@ -213,10 +211,10 @@ func _toggle_settings() -> void:
 	_hud.present_settings()
 
 
-## Back to mouselook if there is a body to look with, otherwise leave the cursor
-## out so the stands buttons stay clickable.
+## Back to mouselook if there is a body to look with (or a spectator cam to steer),
+## otherwise leave the cursor out so the stands buttons stay clickable.
 func _restore_cursor() -> void:
-	if not _in_stands and _alive:
+	if not _in_stands:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		_hud.show_cursor_controls(false)
 	else:
@@ -226,8 +224,6 @@ func _restore_cursor() -> void:
 func _apply_input_settings() -> void:
 	if pawn and pawn.camera_rig:
 		InputSettings.apply_to(pawn.camera_rig)
-	if _camera_rig:
-		InputSettings.apply_to(_camera_rig)
 
 
 # ── Team / spawn ─────────────────────────────────────────────────────────
@@ -251,6 +247,8 @@ func _on_team(msg: Dictionary) -> void:
 		var sz: float = float(msg.get("spawn_z", 0.0))
 		var yaw: float = float(msg.get("yaw", 0.0))
 		_spawn_local_pawn(Vector3(sx, sy, sz), yaw)
+	else:
+		_spectator.start_teammate_follow()
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -281,17 +279,16 @@ func _enter_stands() -> void:
 		pawn.queue_free()
 		pawn = null
 
-	_setup_spectator_camera()
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_start_spectate_watch()
+	_hud.hide_spectator_panel()
 
 
 func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 	if pawn:
 		pawn.queue_free()
 
-	if _camera_rig and _camera_rig.is_inside_tree():
-		_camera_rig.queue_free()
-		_camera_rig = null
+	_spectator.stop()
+	_hud.hide_spectator_panel()
 
 	pawn = LocalPawn.new()
 	add_child(pawn)
@@ -337,6 +334,14 @@ func _physics_process(dt: float) -> void:
 		var rp: RemotePawn = _remotes[pid]
 		rp.interpolate(_snap_time)
 
+	if not _match_over and not blocked and _spectator:
+		if _in_stands:
+			_spectator.update_watch(dt, _remotes)
+			_update_spectator_panel()
+		elif not _alive:
+			_spectator.update_death_follow(dt, _remotes, _my_team)
+			_update_spectator_panel()
+
 	if _meteor_warn_until > 0.0 and _snap_time > _meteor_warn_until:
 		_hud.show_meteor_warning(false)
 		_meteor_warn_until = 0.0
@@ -346,10 +351,12 @@ func _input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
 			or _hud.is_settings_open() or _match_over:
 		return
-	if event is InputEventMouseMotion and pawn and pawn.camera_rig and _alive:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := event as InputEventMouseMotion
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		if pawn and pawn.camera_rig and _alive:
 			pawn.camera_rig.handle_mouse_motion(motion.relative)
+		elif _spectator and (_in_stands or not _alive):
+			_spectator.handle_mouse_motion(motion.relative)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -394,10 +401,18 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not _in_stands:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			_hud.show_cursor_controls(false)
-			return
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+				_hud.show_cursor_controls(false)
+				return
+			if _in_stands and _spectator \
+					and _spectator.view_mode == SpectatorCam.ViewMode.FPV:
+				_spectator.cycle_target(1, _remotes, -1)
+				return
+			if not _in_stands and not _alive and _spectator:
+				_spectator.leave_death_for_teammate(1, _remotes, _my_team)
+				return
 
 	if event.is_action_pressed("ui_cancel"):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -422,6 +437,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		_hud.open_chat(false)
 	if InputBinds.is_action_just_pressed("chat_team"):
 		_hud.open_chat(true)
+
+	if _spectator:
+		if _in_stands:
+			if InputBinds.is_action_just_pressed("spec_swap"):
+				_spectator.toggle_view_mode()
+			if _spectator.view_mode == SpectatorCam.ViewMode.FPV:
+				if event.is_action_pressed("ui_right"):
+					_spectator.cycle_target(1, _remotes, -1)
+				elif event.is_action_pressed("ui_left"):
+					_spectator.cycle_target(-1, _remotes, -1)
+		elif not _alive:
+			if event.is_action_pressed("ui_right") \
+					or InputBinds.is_action_just_pressed("right"):
+				_spectator.leave_death_for_teammate(1, _remotes, _my_team)
+			elif event.is_action_pressed("ui_left") \
+					or InputBinds.is_action_just_pressed("left"):
+				_spectator.leave_death_for_teammate(-1, _remotes, _my_team)
 
 
 # ── Combat events from local weapons ────────────────────────────────────
@@ -601,8 +633,14 @@ func _on_hit(msg: Dictionary) -> void:
 			if pawn:
 				pawn.cancel_special()
 				pawn.weapon.special_armed = false
-				pawn.set_mannequin_visible(false)
 				pawn.set_fp_arms_visible(false)
+				pawn.set_mannequin_visible(true)
+				if pawn.anim_driver:
+					pawn.anim_driver.set_state(AnimDriver.State.DEATH)
+				var body_pos := pawn.movement.position
+				var eye_pos := pawn.movement.get_eye_position()
+				if _spectator:
+					_spectator.start_death(body_pos, eye_pos)
 			_sync_special_hud()
 			if Announcer:
 				Announcer.player_died()
@@ -698,7 +736,7 @@ func _on_chat(msg: Dictionary) -> void:
 func _on_chat_submit(text: String, team_only: bool) -> void:
 	if client:
 		client.send_chat(text, team_only)
-	if not _match_over and not _in_stands and _alive:
+	if not _match_over and not _in_stands:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -885,6 +923,10 @@ func _enter_match_over(winner: int) -> void:
 		return
 	_match_over = true
 	_alive = false
+	if _spectator:
+		_spectator.stop()
+	if _hud:
+		_hud.hide_spectator_panel()
 	if pawn:
 		pawn.cancel_special()
 		pawn.weapon.special_armed = false
@@ -925,6 +967,15 @@ func _parse_round_state(s: String) -> int:
 	if s == "over":
 		return Protocol.RS_OVER
 	return Protocol.RS_ACTIVE
+
+
+func _update_spectator_panel() -> void:
+	if not _spectator or not _hud:
+		return
+	var info := _spectator.get_panel_info(_remotes, _my_team)
+	_hud.show_spectator_panel(
+		str(info["who"]), str(info["sub"]), Color(info["color"]))
+	_hud.set_spectate_crosshair(_spectator.is_fpv_active())
 
 
 func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:

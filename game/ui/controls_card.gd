@@ -39,6 +39,7 @@ const DESCRIPTIONS := {
 	"scoreboard": "Scoreboard — hold",
 	"team_menu": "Team menu — costs a life",
 	"controls": "This controls card",
+	"spec_swap": "Overhead / first-person",
 }
 
 var _left_col: VBoxContainer
@@ -173,6 +174,10 @@ func _rebuild() -> void:
 		[_keys("scoreboard"), DESCRIPTIONS["scoreboard"]],
 		[_keys("team_menu"), DESCRIPTIONS["team_menu"]],
 		[_keys("controls"), DESCRIPTIONS["controls"]],
+	])
+	_group(_right_col, "SPECTATING", MenuLook.CY, [
+		[_keys("spec_swap"), DESCRIPTIONS["spec_swap"]],
+		[["LEFT", "RIGHT"], "Cycle players"],
 	])
 
 	# Clearing the bind leaves ESC as the only way out, so the footer says so.

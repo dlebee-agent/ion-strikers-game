@@ -31,6 +31,13 @@ var _samples: Array[Dictionary] = []
 var _last_time: float = 0.0
 var _render_time: float = 0.0
 
+var _last_eye_x: float = 0.0
+var _last_eye_y: float = 0.0
+var _last_eye_z: float = 0.0
+var _last_eye_yaw: float = 0.0
+var _last_eye_pitch: float = 0.0
+var _last_eye_crouched: bool = false
+
 var _charge_orb: ChargeOrb
 
 
@@ -187,9 +194,34 @@ func trigger_melee() -> void:
 		_anim_driver.trigger_melee()
 
 
+func sample_eye() -> Dictionary:
+	var eye_h: float = Movement.EYE_CROUCH if _last_eye_crouched else Movement.EYE_STAND
+	return {
+		"x": _last_eye_x,
+		"y": _last_eye_y,
+		"z": _last_eye_z,
+		"yaw": _last_eye_yaw,
+		"pitch": _last_eye_pitch,
+		"eye_h": eye_h,
+		"alive": alive,
+	}
+
+
+func set_body_visible(vis: bool) -> void:
+	if _mannequin:
+		_mannequin.visible = vis
+
+
 func _apply_pose(pose: Dictionary) -> void:
 	var pos := Vector3(pose["x"], pose["y"], pose["z"])
 	var yaw_val: float = pose["yaw"]
+
+	_last_eye_x = pos.x
+	_last_eye_y = pos.y
+	_last_eye_z = pos.z
+	_last_eye_yaw = yaw_val
+	_last_eye_pitch = float(pose.get("pitch", 0.0))
+	_last_eye_crouched = bool(pose.get("crouched", false))
 
 	if _mannequin:
 		_mannequin.global_position = pos
