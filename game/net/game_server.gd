@@ -235,6 +235,7 @@ func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 		"bots": bool(msg.get("bots", true)),
 		"bots_shoot": bool(msg.get("bots_shoot", true)),
 		"bots_move": bool(msg.get("bots_move", true)),
+		"bot_skill": BotSkill.from_index(int(msg.get("bot_skill", BotSkill.index_of(BotSkill.DEFAULT_LEVEL)))),
 		"display_name": str(msg.get("display_name", "")),
 	}
 

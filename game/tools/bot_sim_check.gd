@@ -3,6 +3,16 @@ extends SceneTree
 # Throwaway harness: drives a headless match and reports what the bots do.
 # Run: godot --headless --path game --script res://tools/bot_sim_check.gd
 
+# The two audits below test trigger discipline, not target acquisition, so they
+# run with the cone and the burst pause opened right up. Left on a difficulty
+# preset they would spend the whole run failing to notice the enemy instead.
+const AUDIT_SESSION := {
+	"reaction": 0.0, "aim_err": 0.0, "aim_gate": 0.11, "turn": 0.30,
+	"fov": 360.0, "sight": 200.0, "fire_gap": 0.15,
+	"burst": 100000, "burst_pause": 0.0,
+	"duck_chance": 0.0, "cover_chance": 0.0, "idle_chance": 0.0,
+}
+
 func _initialize() -> void:
 	var compiled := MapEngine.compile(ParkourMap.definition())
 	var cols := MapBuilder.build_world(compiled)
@@ -32,18 +42,21 @@ func _initialize() -> void:
 
 	_wall_audit(cols, arena)
 	_pinned_audit(cols, arena)
-	_run_match(arena)
+
+	print("\n== difficulty sweep (60s deathmatch each) ==")
+	for level: String in BotSkill.LEVELS:
+		_run_match(arena, level)
+
 	quit()
 
 
-# Dev switch check: bots_move off should leave a bot rooted but still shooting.
 func _pinned_audit(cols: CollisionWorld, arena: float) -> void:
 	var director := BotDirector.new()
 	director.configure(cols, arena, MapCatalog.normalize_spawns(ParkourMap.definition()["spawns"]))
 
 	var bot := Participant.new(-1, "BOT Pinned", true)
 	bot.team = Protocol.TEAM_BLUE
-	bot.connection_session = {"skill": 0.85, "reaction": 0.0, "aim_err": 0.0}
+	bot.connection_session = AUDIT_SESSION.duplicate()
 	director.init_ai(bot)
 
 	var victim := Participant.new(2, "Victim", false)
@@ -52,7 +65,7 @@ func _pinned_audit(cols: CollisionWorld, arena: float) -> void:
 	var bot_pawn := ServerPawn.new()
 	bot_pawn.position = Vector3(18.0, 0.0, -6.0)
 	var victim_pawn := ServerPawn.new()
-	victim_pawn.position = Vector3(18.0, 0.0, 6.0)  # clear side lane, no cover
+	victim_pawn.position = Vector3(18.0, 0.0, 6.0)
 
 	var people := {-1: bot, 2: victim}
 	var bodies := {-1: bot_pawn, 2: victim_pawn}
@@ -73,15 +86,13 @@ func _pinned_audit(cols: CollisionWorld, arena: float) -> void:
 	])
 
 
-# Drives update_bot() directly with an enemy parked behind the central hill and
-# counts any frame where it wants to shoot while the geometry is in the way.
 func _wall_audit(cols: CollisionWorld, arena: float) -> void:
 	var director := BotDirector.new()
 	director.configure(cols, arena, MapCatalog.normalize_spawns(ParkourMap.definition()["spawns"]))
 
 	var shooter := Participant.new(-1, "BOT Audit", true)
 	shooter.team = Protocol.TEAM_BLUE
-	shooter.connection_session = {"skill": 0.85, "reaction": 0.0, "aim_err": 0.0}
+	shooter.connection_session = AUDIT_SESSION.duplicate()
 	director.init_ai(shooter)
 
 	var victim := Participant.new(2, "Victim", false)
@@ -92,7 +103,7 @@ func _wall_audit(cols: CollisionWorld, arena: float) -> void:
 	shooter_pawn.position = Vector3(0.0, 0.0, -13.0)
 	var victim_pawn := ServerPawn.new()
 	victim_pawn.participant_id = 2
-	victim_pawn.position = Vector3(0.0, 0.0, -6.0)  # far side of the 2.4m crest
+	victim_pawn.position = Vector3(0.0, 0.0, -6.0)
 
 	var people := {-1: shooter, 2: victim}
 	var bodies := {-1: shooter_pawn, 2: victim_pawn}
@@ -103,7 +114,6 @@ func _wall_audit(cols: CollisionWorld, arena: float) -> void:
 	var dt := 1.0 / 60.0
 	for i in 900:
 		now += dt
-		# Freeze the pair in place so the wall between them never moves.
 		shooter_pawn.position = Vector3(0.0, 0.0, -13.0)
 		var out := director.update_bot(shooter, shooter_pawn, people, bodies, true, true, true, now, dt)
 		if out["shoot"] or out["special_start"]:
@@ -117,12 +127,14 @@ func _wall_audit(cols: CollisionWorld, arena: float) -> void:
 	print("  shots wanted: ", shots, "   fired with geometry in the way: ", through_wall)
 
 
-func _run_match(arena: float) -> void:
-	var inst := GameInstance.new({"map_id": "parkour", "mode": "dm", "bots": true, "kills": 999})
+func _run_match(arena: float, level: String) -> void:
+	var inst := GameInstance.new({
+		"map_id": "parkour", "mode": "dm", "bots": true,
+		"kills": 999, "bot_skill": level,
+	})
 	root.add_child(inst)
 	inst.setup_map()
 
-	# One human on blue so the roster keeps its bots, parked in its own corner.
 	var human := Participant.new(1, "Tester", false)
 	human.team = Protocol.TEAM_BLUE
 	inst.participants[1] = human
@@ -139,17 +151,20 @@ func _run_match(arena: float) -> void:
 	var start: Dictionary = {}
 	var travelled: Dictionary = {}
 	var peak_y: Dictionary = {}
+	var stopped_ticks: Dictionary = {}
+	var crouched_ticks: Dictionary = {}
 	for pid: int in inst.pawns:
 		start[pid] = (inst.pawns[pid] as ServerPawn).position
 		travelled[pid] = 0.0
 		peak_y[pid] = 0.0
+		stopped_ticks[pid] = 0
+		crouched_ticks[pid] = 0
 
 	var prev: Dictionary = start.duplicate()
 	var sim_t0 := Time.get_ticks_msec()
 	var span_z := {}
 	for i in 3600:  # 60 seconds
 		inst.tick(dt)
-		# Keep the human alive and out of the way; this is a bot-vs-bot reading.
 		(inst.pawns[1] as ServerPawn).position = Vector3(-20.0, 0.0, -20.0)
 		(inst.pawns[1] as ServerPawn).protected_until = 1e9
 		for pid: int in inst.pawns:
@@ -158,23 +173,28 @@ func _run_match(arena: float) -> void:
 				continue
 			if prev.has(pid):
 				var hop := (pawn.position - (prev[pid] as Vector3)).length()
-				if hop < 1.0:  # skip the teleport a respawn makes
+				if hop < 1.0:
 					travelled[pid] = float(travelled[pid]) + hop
+				if hop < 0.01:
+					stopped_ticks[pid] = int(stopped_ticks[pid]) + 1
+			if pawn.crouched:
+				crouched_ticks[pid] = int(crouched_ticks[pid]) + 1
 			prev[pid] = pawn.position
 			peak_y[pid] = maxf(float(peak_y.get(pid, 0.0)), pawn.position.y)
 			var seen: Array = span_z.get(pid, [999.0, -999.0])
 			span_z[pid] = [minf(seen[0], pawn.position.z), maxf(seen[1], pawn.position.z)]
 
-	print("-- 60s deathmatch (", Time.get_ticks_msec() - sim_t0, "ms of cpu) --")
+	print("-- %s (60s, %dms cpu) --" % [level.to_upper(), Time.get_ticks_msec() - sim_t0])
 	for pid: int in inst.participants:
 		var p: Participant = inst.participants[pid]
 		if not inst.pawns.has(pid):
 			continue
-		var pawn: ServerPawn = inst.pawns[pid]
 		var seen: Array = span_z.get(pid, [0.0, 0.0])
-		print("  %-12s team=%d  moved=%6.1fm  z range %6.1f..%5.1f  peak y=%.1f  kills=%d deaths=%d" % [
+		var stop_s := float(stopped_ticks.get(pid, 0)) * dt
+		var crouch_s := float(crouched_ticks.get(pid, 0)) * dt
+		print("  %-12s team=%d  moved=%6.1fm  stopped=%.1fs  crouched=%.1fs  kills=%d deaths=%d" % [
 			p.display_name, p.team, float(travelled.get(pid, 0.0)),
-			float(seen[0]), float(seen[1]), float(peak_y.get(pid, 0.0)), p.kills, p.deaths,
+			stop_s, crouch_s, p.kills, p.deaths,
 		])
 
 	var total_kills := 0

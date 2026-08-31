@@ -124,6 +124,7 @@ func _handle_create(peer: StreamPeerTCP, msg: Dictionary) -> void:
 		"bots": bool(msg.get("bots", true)),
 		"bots_shoot": bool(msg.get("bots_shoot", true)),
 		"bots_move": bool(msg.get("bots_move", true)),
+		"bot_skill": str(msg.get("bot_skill", BotSkill.DEFAULT_LEVEL)),
 		"display_name": str(msg.get("display_name", "")),
 	}
 

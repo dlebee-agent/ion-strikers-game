@@ -194,6 +194,7 @@ func _send_create_game() -> void:
 		bool(_create_settings.get("bots", true)),
 		bool(_create_settings.get("bots_shoot", true)),
 		bool(_create_settings.get("bots_move", true)),
+		BotSkill.index_of(str(_create_settings.get("bot_skill", BotSkill.DEFAULT_LEVEL))),
 		str(_create_settings.get("display_name", "")))
 	_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
 

@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 5
+const PROTOCOL_VERSION := 6
 
 const MODE_CLASSIC := 0
 const MODE_DM := 1
@@ -188,6 +188,7 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["bots"] = b.get_u8() != 0
 			d["bots_shoot"] = b.get_u8() != 0
 			d["bots_move"] = b.get_u8() != 0
+			d["bot_skill"] = b.get_u8()
 			d["display_name"] = _read_string(b)
 		Msg.JOIN_DIRECT:
 			d["v"] = b.get_u8()
@@ -408,7 +409,8 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 static func encode_create_game(
 		map_name: String, mode: String, rounds: int, kills: int,
 		max_players: int, max_spectators: int, bots: bool,
-		bots_shoot: bool, bots_move: bool, display_name: String) -> PackedByteArray:
+		bots_shoot: bool, bots_move: bool, bot_skill: int,
+		display_name: String) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.CREATE_GAME)
 	b.put_u8(0)
@@ -421,6 +423,7 @@ static func encode_create_game(
 	b.put_u8(1 if bots else 0)
 	b.put_u8(1 if bots_shoot else 0)
 	b.put_u8(1 if bots_move else 0)
+	b.put_u8(bot_skill)
 	_write_string(b, display_name)
 	return b.data_array
 

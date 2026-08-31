@@ -19,12 +19,7 @@ const BODY_HEIGHT := BotNav.BODY_HEIGHT
 const STEP_UP := BotNav.STEP_UP
 const FALL_ACCEL := 20.32
 
-## Target picking and routing run on their own clock — a bot re-deciding who to
-## shoot sixty times a second only burns raycasts, and the jitter it produced in
-## aim and pathing read as twitchiness rather than skill.
 const THINK_INTERVAL := 0.09
-## How long a bot keeps chasing someone who broke line of sight before it gives
-## up and goes back to roaming.
 const MEMORY_TIME := 5.0
 const REPATH_INTERVAL := 1.1
 const WAYPOINT_R := 0.9
@@ -32,21 +27,34 @@ const ROAM_TIMEOUT := 9.0
 const SEPARATION_R := 1.8
 const AIM_DRIFT_INTERVAL := 0.25
 
-## Wanting to move but not moving for this many thinks means something is in the
-## way that the steering cannot see. Pathing takes over until it is clear.
 const STUCK_THINKS := 4
 const STUCK_DIST := 0.22
 
+## How long a bot hides behind cover before peeking back out.
+const COVER_PEEK_LO := 1.2
+const COVER_PEEK_HI := 2.8
+## How far to search for a cover spot.
+const COVER_SEARCH_R := 10.0
+
+## Alert window after taking damage — lifts the FOV cone so a bot shot from
+## behind can spin around and fight.
+const ALERT_DURATION := 3.0
+
 var nav: BotNav = null
+var _skill_level: String = BotSkill.DEFAULT_LEVEL
+var _preset: Dictionary = BotSkill.preset(BotSkill.DEFAULT_LEVEL)
 
 var _name_idx: int = 0
 var _next_bot_id: int = -1
 var _arena_size: float = 28.0
-var _homes: Dictionary = {}  # team → Vector3
+var _homes: Dictionary = {}
 
 
-## Called once the map is compiled. Everything the bots reason about — what is
-## solid, what is walkable, where each side lives — is derived here.
+func set_skill(level: String) -> void:
+	_skill_level = BotSkill.normalize(level)
+	_preset = BotSkill.preset(_skill_level)
+
+
 func configure(world: CollisionWorld, arena: float, spawns: Dictionary) -> void:
 	_arena_size = arena
 	_homes.clear()
@@ -136,29 +144,45 @@ func manage_bots(participants: Dictionary, bots_enabled: bool, max_players: int)
 
 
 func _make_bot_info(team_val: int) -> Dictionary:
-	var skill := 0.35 + randf() * 0.5
 	var bot_name := "BOT " + BOT_NAMES[_name_idx % BOT_NAMES.size()]
 	_name_idx += 1
 
 	var id := _next_bot_id
 	_next_bot_id -= 1
 
-	return {
+	var info := {
 		"action": "add",
 		"id": id,
 		"name": bot_name,
 		"team": team_val,
-		"skill": skill,
-		"reaction": 0.35 - skill * 0.22,
-		"aim_err": 0.09 * (1.0 - skill) + 0.01,
 	}
+	# Write every preset field into the connection_session so init_ai picks
+	# them up without knowing which level is active.
+	for key: String in _preset:
+		info[key] = _preset[key]
+	return info
 
 
 func init_ai(p: Participant) -> void:
+	var s := p.connection_session
+	var pr := _preset
 	p.connection_session["ai"] = {
-		"skill": p.connection_session.get("skill", 0.5),
-		"reaction": p.connection_session.get("reaction", 0.25),
-		"aim_err": p.connection_session.get("aim_err", 0.05),
+		"aim_err": s.get("aim_err", pr.get("aim_err", 0.12)),
+		"aim_gate": s.get("aim_gate", pr.get("aim_gate", 0.20)),
+		"reaction": s.get("reaction", pr.get("reaction", 0.55)),
+		"fire_gap": s.get("fire_gap", pr.get("fire_gap", 0.34)),
+		"burst": s.get("burst", pr.get("burst", 3)),
+		"burst_pause": s.get("burst_pause", pr.get("burst_pause", 0.9)),
+		"turn": s.get("turn", pr.get("turn", 0.11)),
+		"fov": s.get("fov", pr.get("fov", 130.0)),
+		"sight": s.get("sight", pr.get("sight", 30.0)),
+		"speed": s.get("speed", pr.get("speed", 0.85)),
+		"idle_chance": s.get("idle_chance", pr.get("idle_chance", 0.30)),
+		"idle_time_lo": s.get("idle_time_lo", pr.get("idle_time_lo", 0.8)),
+		"idle_time_hi": s.get("idle_time_hi", pr.get("idle_time_hi", 2.0)),
+		"duck_chance": s.get("duck_chance", pr.get("duck_chance", 0.25)),
+		"cover_chance": s.get("cover_chance", pr.get("cover_chance", 0.40)),
+		"special_delay": s.get("special_delay", pr.get("special_delay", 1.2)),
 		"state": "roam",
 		"target": 0,
 		"visible": false,
@@ -184,6 +208,7 @@ func init_ai(p: Participant) -> void:
 		"next_shot": 0.0,
 		"next_melee": 0.0,
 		"special_until": 0.0,
+		"special_dither_until": 0.0,
 		"vy": 0.0,
 		"wish": Vector3.ZERO,
 		"separation": Vector3.ZERO,
@@ -193,14 +218,25 @@ func init_ai(p: Participant) -> void:
 		"think_pos": Vector3.ZERO,
 		"think_at": 0.0,
 		"pawn_iid": 0,
+		# Burst fire
+		"burst_left": int(s.get("burst", pr.get("burst", 3))),
+		# Idle / stop
+		"idle_until": 0.0,
+		"scan_yaw": 0.0,
+		"scan_yaw_at": 0.0,
+		# Duck
+		"want_crouch": false,
+		# Cover
+		"cover_until": 0.0,
+		"cover_goal": Vector3.ZERO,
+		"last_hp": 100,
+		# Alert (lifts FOV cone after being hit)
+		"alert_until": 0.0,
 	}
 
 
 # ── per-tick brain ───────────────────────────────────────────────────────
 
-## `bots_shoot` and `bots_move` are the dev-mode switches. Either one off leaves
-## the rest of the brain running: a bot that cannot move still tracks and fires,
-## and one that cannot shoot still roams, so each is useful on its own.
 func update_bot(p: Participant, pawn: ServerPawn, all_participants: Dictionary,
 		all_pawns: Dictionary, bots_shoot: bool, bots_move: bool,
 		round_active: bool, now: float, dt: float) -> Dictionary:
@@ -216,9 +252,14 @@ func update_bot(p: Participant, pawn: ServerPawn, all_participants: Dictionary,
 	if int(ai["pawn_iid"]) != int(pawn.get_instance_id()):
 		_on_respawn(ai, pawn)
 
+	# Detect hp drops to trigger cover-seeking and alert.
+	if pawn.hp < int(ai["last_hp"]):
+		ai["alert_until"] = now + ALERT_DURATION
+		_maybe_seek_cover(pawn, ai, all_pawns, now)
+	ai["last_hp"] = pawn.hp
+
 	# Winding a special up plants the bot: no steering, no trigger, no way out
-	# of it until the hold elapses. Gravity still applies so a bot charging on a
-	# ledge it just walked off still lands.
+	# of it until the hold elapses. Gravity still applies.
 	if p.special_at > 0.0:
 		if now > float(ai["special_until"]):
 			result["special_release"] = true
@@ -233,18 +274,29 @@ func update_bot(p: Participant, pawn: ServerPawn, all_participants: Dictionary,
 	var target_pawn: ServerPawn = all_pawns.get(target_id) if target_id != 0 else null
 	var engaged: bool = bool(ai["visible"]) and target_pawn != null and target_pawn.alive
 
-	# Pinned bots still get a motion pass so gravity settles them onto the floor
-	# rather than leaving one hanging where it happened to be standing.
+	# Spotting a target breaks idle and cover.
+	if engaged:
+		ai["idle_until"] = 0.0
+
+	# Apply crouch state to the pawn so snapshots propagate it.
+	pawn.crouched = bool(ai["want_crouch"])
+
 	var wish := Vector3.ZERO
 	if bots_move:
-		if engaged and now >= float(ai["force_path_until"]):
+		var state: String = ai["state"]
+
+		# While idling the bot stands still and scans its head.
+		if state == "roam" and now < float(ai["idle_until"]) and not engaged:
+			wish = Vector3.ZERO
+		elif state == "cover" and now < float(ai["cover_until"]):
+			wish = _path_wish(pawn, ai)
+		elif engaged and now >= float(ai["force_path_until"]):
 			wish = _combat_wish(pawn, ai, target_pawn, now)
 		else:
 			wish = _path_wish(pawn, ai)
 
 		wish += (ai["separation"] as Vector3) * 0.9
 		if now < float(ai["unstick_until"]):
-			# Slide along whatever is in the way instead of grinding into it.
 			wish = Vector3(-wish.z, 0.0, wish.x) * float(ai["strafe_dir"]) + wish * 0.35
 
 	_apply_motion(pawn, ai, wish, dt)
@@ -276,6 +328,13 @@ func _on_respawn(ai: Dictionary, pawn: ServerPawn) -> void:
 	ai["force_path_until"] = 0.0
 	ai["think_pos"] = pawn.position
 	ai["think_at"] = 0.0
+	ai["burst_left"] = int(ai["burst"])
+	ai["idle_until"] = 0.0
+	ai["want_crouch"] = false
+	ai["cover_until"] = 0.0
+	ai["last_hp"] = 100
+	ai["alert_until"] = 0.0
+	ai["special_dither_until"] = 0.0
 
 
 # ── deciding ─────────────────────────────────────────────────────────────
@@ -299,6 +358,11 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 	var eye := _eye(pawn)
 	var current := int(ai["target"])
 
+	var my_yaw: float = ai["yaw"]
+	var half_fov := deg_to_rad(float(ai["fov"]) * 0.5)
+	var sight_range: float = ai["sight"]
+	var alerted := now < float(ai["alert_until"])
+
 	var nearest := 0
 	var nearest_dist := INF
 	var current_dist := INF
@@ -315,6 +379,21 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 			continue
 
 		var dist := eye.distance_to(enemy_pawn.position)
+
+		# Range gate (alert lifts it).
+		if not alerted and dist > sight_range:
+			continue
+
+		# FOV gate: angle between our facing and the enemy, on the horizontal
+		# plane. Alert or 360-degree FOV skips the test.
+		if not alerted and half_fov < PI:
+			var dx := enemy_pawn.position.x - pawn.position.x
+			var dz := enemy_pawn.position.z - pawn.position.z
+			var angle_to := atan2(-dx, -dz)
+			var diff := absf(wrapf(angle_to - my_yaw, -PI, PI))
+			if diff > half_fov:
+				continue
+
 		if dist >= nearest_dist and pid != current:
 			continue
 		if nav.blocked(eye, _aim_point(enemy_pawn)):
@@ -327,9 +406,6 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 			nearest_dist = dist
 			nearest = pid
 
-	# Swapping targets every time someone edges closer means never finishing a
-	# duel, so whoever is already being fought keeps priority until someone else
-	# is clearly the better shot.
 	var chosen := nearest
 	if current_seen and current_dist <= nearest_dist * 1.5:
 		chosen = current
@@ -339,7 +415,8 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 			ai["seen_at"] = now
 		ai["target"] = chosen
 		ai["visible"] = true
-		ai["state"] = "fight"
+		if ai["state"] != "cover" or now >= float(ai["cover_until"]):
+			ai["state"] = "fight"
 		ai["last_seen_pos"] = (all_pawns[chosen] as ServerPawn).position
 		ai["last_seen_at"] = now
 		return
@@ -352,7 +429,7 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 		return
 
 	ai["target"] = 0
-	if ai["state"] != "roam":
+	if ai["state"] != "roam" and ai["state"] != "cover":
 		ai["state"] = "roam"
 		ai["has_goal"] = false
 
@@ -360,6 +437,11 @@ func _pick_target(p: Participant, pawn: ServerPawn, ai: Dictionary,
 func _choose_goal(p: Participant, pawn: ServerPawn, ai: Dictionary,
 		all_pawns: Dictionary, now: float) -> void:
 	var state: String = ai["state"]
+
+	if state == "cover":
+		ai["goal"] = ai["cover_goal"]
+		ai["has_goal"] = true
+		return
 
 	if state == "fight":
 		var target_pawn: ServerPawn = all_pawns.get(int(ai["target"]))
@@ -373,18 +455,22 @@ func _choose_goal(p: Participant, pawn: ServerPawn, ai: Dictionary,
 		ai["has_goal"] = true
 		return
 
+	# Roam
 	var reached: bool = bool(ai["has_goal"]) and _flat_dist(pawn.position, ai["goal"]) < 2.0
 	if not bool(ai["has_goal"]) or reached or now - float(ai["goal_at"]) > ROAM_TIMEOUT:
+		# Roll for an idle stop when arriving at a destination.
+		if reached and randf() < float(ai["idle_chance"]):
+			var lo: float = ai["idle_time_lo"]
+			var hi: float = ai["idle_time_hi"]
+			ai["idle_until"] = now + lo + randf() * (hi - lo)
+			ai["scan_yaw"] = float(ai["yaw"]) + (randf() - 0.5) * 2.0
+			ai["scan_yaw_at"] = now + 0.6 + randf() * 1.0
 		ai["goal"] = _roam_goal(p, pawn)
 		ai["has_goal"] = true
 		ai["goal_at"] = now
 		ai["repath_at"] = 0.0
 
 
-## Roaming used to be a random point anywhere, which left bots milling around
-## their own half. Sampling a handful of reachable cells and favouring the ones
-## near the other side's spawn pushes them out to contest the map instead, while
-## the random term keeps six bots from filing down the same lane.
 func _roam_goal(p: Participant, pawn: ServerPawn) -> Vector3:
 	var points := nav.open_points
 	if points.is_empty():
@@ -469,10 +555,58 @@ func _maybe_repath(pawn: ServerPawn, ai: Dictionary, now: float) -> void:
 	ai["path_goal"] = ai["goal"]
 	ai["repath_at"] = now + REPATH_INTERVAL * (0.8 + randf() * 0.4)
 
-	# Nowhere to go: the goal is walled off or on a ledge no bot can climb.
-	# Pick somewhere else rather than stand there pushing at the geometry.
 	if (ai["path"] as PackedVector3Array).is_empty() and ai["state"] == "roam":
 		ai["has_goal"] = false
+
+
+# ── cover ────────────────────────────────────────────────────────────────
+
+## Called when the bot takes damage. Rolls cover_chance and, if it hits,
+## searches nearby open points for a spot that breaks line of sight to the
+## current target, then paths there crouched.
+func _maybe_seek_cover(pawn: ServerPawn, ai: Dictionary,
+		all_pawns: Dictionary, now: float) -> void:
+	if ai["state"] == "cover":
+		return
+	if randf() >= float(ai["cover_chance"]):
+		return
+
+	var target_id := int(ai["target"])
+	var target_pawn: ServerPawn = all_pawns.get(target_id) if target_id != 0 else null
+	if target_pawn == null or not target_pawn.alive:
+		return
+
+	var target_aim := _aim_point(target_pawn)
+	var points := nav.open_points
+	if points.is_empty():
+		return
+
+	var best := Vector3.ZERO
+	var best_score := INF
+	var found := false
+	for _i in 20:
+		var candidate := points[randi() % points.size()]
+		var d := _flat_dist(candidate, pawn.position)
+		if d < 1.5 or d > COVER_SEARCH_R:
+			continue
+		var cover_eye := Vector3(candidate.x, candidate.y + Hitbox.eye_height(true), candidate.z)
+		if not nav.blocked(cover_eye, target_aim):
+			continue
+		if d < best_score:
+			best_score = d
+			best = candidate
+			found = true
+
+	if not found:
+		return
+
+	ai["state"] = "cover"
+	ai["cover_goal"] = best
+	ai["goal"] = best
+	ai["has_goal"] = true
+	ai["repath_at"] = 0.0
+	ai["cover_until"] = now + COVER_PEEK_LO + randf() * (COVER_PEEK_HI - COVER_PEEK_LO)
+	ai["want_crouch"] = true
 
 
 # ── steering ─────────────────────────────────────────────────────────────
@@ -488,10 +622,18 @@ func _path_wish(pawn: ServerPawn, ai: Dictionary) -> Vector3:
 			i += 1
 			continue
 		ai["path_i"] = i
+		# Drop crouch while travelling long distances so the bot is not
+		# permanently duck-walking across the map.
+		if flat.length() > 3.0 and ai["state"] != "cover":
+			ai["want_crouch"] = false
 		return flat.normalized()
 
 	ai["path_i"] = i
 	if not bool(ai["has_goal"]):
+		return Vector3.ZERO
+
+	# Arrived at cover spot — stay crouched and stop.
+	if ai["state"] == "cover":
 		return Vector3.ZERO
 
 	var goal: Vector3 = ai["goal"]
@@ -503,6 +645,12 @@ func _combat_wish(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn, now
 	if now > float(ai["strafe_flip_at"]):
 		ai["strafe_dir"] = -float(ai["strafe_dir"])
 		ai["strafe_flip_at"] = now + 0.6 + randf() * 1.2
+		# Roll for a duck on each strafe flip when beyond melee range.
+		var dist_to_target := _flat_dist(pawn.position, target_pawn.position)
+		if dist_to_target > MELEE_RANGE:
+			ai["want_crouch"] = randf() < float(ai["duck_chance"])
+		else:
+			ai["want_crouch"] = false
 
 	var facing: float = ai["yaw"]
 	var face := Vector3(-sin(facing), 0.0, -cos(facing))
@@ -516,36 +664,31 @@ func _combat_wish(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn, now
 	elif dist < PREFERRED_RANGE - 5.0:
 		wish -= face
 
-	# Hurt bots give ground instead of trading to the death.
+	# Hurt bots give ground.
 	if pawn.hp < 35:
 		wish -= face * 0.8
 
 	return wish
 
 
-## Walks the bot one tick: horizontal push-out against anything too tall to step
-## onto, then the vertical settle that lets it take stairs and drop off ledges.
-## Without the settle a bot is pinned at spawn height and the first 0.3m tread on
-## the map is a wall to it.
 func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -> void:
 	var dir := Vector3(wish.x, 0.0, wish.z)
 	var speed := dir.length()
 	dir = dir / speed if speed > 0.001 else Vector3.ZERO
 	ai["wish"] = dir
 
+	var move_speed := BOT_SPEED * float(ai.get("speed", 1.0))
+	if bool(ai["want_crouch"]):
+		move_speed *= Movement.DUCK_MOD
+
 	var feet := pawn.position.y
-	var nx := pawn.position.x + dir.x * BOT_SPEED * dt
-	var nz := pawn.position.z + dir.z * BOT_SPEED * dt
+	var nx := pawn.position.x + dir.x * move_speed * dt
+	var nz := pawn.position.z + dir.z * move_speed * dt
 
 	if nav.world != null:
-		# Push out of anything the bot would walk into, using a body that starts
-		# a step above the feet. Whatever is below that is something they walk up
-		# onto rather than something that stops them, which is the exemption the
-		# box version made by skipping low boxes outright.
 		var clearance := BODY_HEIGHT - STEP_UP
 		var half := Vector3(PLAYER_R, clearance * 0.5, PLAYER_R)
 		var push := nav.world.depenetrate(Vector3(nx, feet + STEP_UP + half.y, nz), half)
-		# Horizontal only: how high the bot ends up is settled by surface_at below.
 		nx += push.x
 		nz += push.z
 
@@ -576,8 +719,6 @@ func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -
 
 # ── aiming ───────────────────────────────────────────────────────────────
 
-## Turns the head toward whatever the bot cares about and returns how far off
-## target it still is, in radians, so the trigger can wait for the barrel.
 func _update_aim(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn,
 		now: float, dt: float) -> float:
 	var eye := _eye(pawn)
@@ -586,10 +727,19 @@ func _update_aim(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn,
 	if target_pawn != null:
 		look = _aim_point(target_pawn)
 	else:
+		# A bot with nowhere to look sweeps its head instead of freezing. Without
+		# this a stationary bot stays permanently blind to anything outside the
+		# cone it happens to be facing, since the cone is measured off this yaw.
 		var heading: Vector3 = ai["wish"]
-		if heading.length_squared() < 0.01:
-			return PI
-		look = eye + heading * 8.0
+		var idling := now < float(ai["idle_until"])
+		if not idling and heading.length_squared() >= 0.01:
+			look = eye + heading * 8.0
+		else:
+			if now >= float(ai["scan_yaw_at"]):
+				ai["scan_yaw"] = float(ai["yaw"]) + (randf() - 0.5) * 2.0
+				ai["scan_yaw_at"] = now + 1.0 + randf() * 1.0
+			var scan_yaw: float = ai["scan_yaw"]
+			look = eye + Vector3(-sin(scan_yaw), 0.0, -cos(scan_yaw)) * 8.0
 
 	var flat_x := look.x - eye.x
 	var flat_z := look.z - eye.z
@@ -598,8 +748,7 @@ func _update_aim(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn,
 		return PI
 
 	var want_yaw := atan2(-flat_x, -flat_z)
-	var turn := 0.10 + float(ai["skill"]) * 0.22
-	# Expressed as a rate so the turn is the same whatever the tick length.
+	var turn: float = ai["turn"]
 	var blend := 1.0 - pow(1.0 - turn, dt * 60.0)
 
 	var delta := wrapf(want_yaw - float(ai["yaw"]), -PI, PI)
@@ -616,9 +765,6 @@ func _update_aim(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn,
 	return absf(delta)
 
 
-## Aim error wanders instead of being re-rolled every frame. Fresh noise per tick
-## averaged out to a dead-centre bot that occasionally flicked; a slow drift is
-## what a hand that is not quite steady actually looks like.
 func _drift_aim_error(ai: Dictionary, now: float, dt: float) -> void:
 	var err: float = ai["aim_err"]
 	if now > float(ai["drift_at"]):
@@ -636,47 +782,52 @@ func _drift_aim_error(ai: Dictionary, now: float, dt: float) -> void:
 func _fire_decision(p: Participant, pawn: ServerPawn, ai: Dictionary,
 		target_pawn: ServerPawn, all_participants: Dictionary, all_pawns: Dictionary,
 		aim_off: float, now: float, result: Dictionary) -> void:
-	var skill: float = ai["skill"]
-	if aim_off > 0.10 + (1.0 - skill) * 0.14:
+	var gate: float = ai["aim_gate"]
+	if aim_off > gate:
 		return
 	if now - float(ai["seen_at"]) < float(ai["reaction"]):
 		return
-	# Spawn protection makes them untouchable, so shooting is a giveaway of
-	# position for nothing.
 	if now < target_pawn.protected_until:
 		return
 
 	var eye := _eye(pawn)
 	var dist := eye.distance_to(target_pawn.position)
 
-	# A punch hits harder than a bolt, so take it whenever it is off cooldown —
-	# but keep shooting in between rather than standing there winding up.
 	if dist < MELEE_RANGE and now > float(ai["next_melee"]):
 		ai["next_melee"] = now + 0.9
 		result["melee"] = true
 		return
 
-	# The gate that stops a bot firing into a wall: the shot is confirmed against
-	# the same geometry the server will trace it through, at the moment of firing
-	# rather than whenever the last think happened.
 	if nav.blocked(eye, _aim_point(target_pawn)):
 		return
 
+	# Special: dither for special_delay seconds before spending it.
 	if p.special_armed and dist < SPECIAL_RANGE * 0.8:
-		result["special_start"] = true
-		ai["special_until"] = now + 0.5 + randf() * 0.7
-		return
+		if float(ai["special_dither_until"]) <= 0.0:
+			ai["special_dither_until"] = now + float(ai["special_delay"])
+		if now >= float(ai["special_dither_until"]):
+			result["special_start"] = true
+			ai["special_until"] = now + 0.5 + randf() * 0.7
+			ai["special_dither_until"] = 0.0
+			return
 
 	if now <= float(ai["next_shot"]):
 		return
 	if _friendly_in_line(p, pawn, all_participants, all_pawns, dist):
 		return
 
-	ai["next_shot"] = now + 0.14 + (1.0 - skill) * 0.12
+	# Burst fire: shoot burst shots, then pause.
+	var left := int(ai["burst_left"])
+	if left <= 0:
+		ai["burst_left"] = int(ai["burst"])
+		ai["next_shot"] = now + float(ai["burst_pause"])
+		return
+
+	ai["burst_left"] = left - 1
+	ai["next_shot"] = now + float(ai["fire_gap"])
 	result["shoot"] = true
 
 
-## Bots hold fire rather than put a laser through a team-mate's back.
 func _friendly_in_line(p: Participant, pawn: ServerPawn, all_participants: Dictionary,
 		all_pawns: Dictionary, dist: float) -> bool:
 	var eye := _eye(pawn)

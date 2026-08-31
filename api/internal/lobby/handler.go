@@ -29,6 +29,7 @@ type CreateRequest struct {
 	Bots          bool   `json:"bots"`
 	BotsShoot     bool   `json:"bots_shoot"`
 	BotsMove      bool   `json:"bots_move"`
+	BotSkill      string `json:"bot_skill,omitempty"`
 	DisplayName   string `json:"display_name,omitempty"`
 }
 
@@ -72,6 +73,7 @@ func (h *Handler) ServeCreate(w http.ResponseWriter, r *http.Request) {
 		Bots:          req.Bots,
 		BotsShoot:     req.BotsShoot,
 		BotsMove:      req.BotsMove,
+		BotSkill:      req.BotSkill,
 		DisplayName:   req.DisplayName,
 	})
 	if err != nil {

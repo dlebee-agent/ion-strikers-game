@@ -40,6 +40,7 @@ type CreateGameRequest struct {
 	Bots          bool   `json:"bots"`
 	BotsShoot     bool   `json:"bots_shoot"`
 	BotsMove      bool   `json:"bots_move"`
+	BotSkill      string `json:"bot_skill,omitempty"`
 	DisplayName   string `json:"display_name,omitempty"`
 }
 

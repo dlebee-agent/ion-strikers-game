@@ -18,6 +18,7 @@ var max_spectators: int = 12
 var bots_enabled: bool = true
 var bots_shoot: bool = true
 var bots_move: bool = true
+var bot_skill: String = BotSkill.DEFAULT_LEVEL
 var cheats: bool = false
 
 var match_state: MatchState
@@ -83,6 +84,7 @@ func _init(cfg: Dictionary = {}) -> void:
 	bots_enabled = cfg.get("bots", true)
 	bots_shoot = cfg.get("bots_shoot", true)
 	bots_move = cfg.get("bots_move", true)
+	bot_skill = BotSkill.normalize(str(cfg.get("bot_skill", BotSkill.DEFAULT_LEVEL)))
 
 	match_state = MatchState.new()
 	match_state.mode = mode
@@ -97,6 +99,7 @@ func setup_map() -> void:
 		_setup_community_map()
 	else:
 		_setup_builtin_map()
+	bot_director.set_skill(bot_skill)
 	bot_director.configure(world, arena_size, spawns)
 
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
@@ -930,11 +933,11 @@ func _manage_bots() -> void:
 		if action["action"] == "add":
 			var bot_p := Participant.new(action["id"], action["name"], true)
 			bot_p.team = action["team"]
-			bot_p.connection_session = {
-				"skill": action["skill"],
-				"reaction": action.get("reaction", 0.25),
-				"aim_err": action.get("aim_err", 0.05),
-			}
+			var session := {}
+			for key: String in action:
+				if key != "action" and key != "id" and key != "name" and key != "team":
+					session[key] = action[key]
+			bot_p.connection_session = session
 			participants[action["id"]] = bot_p
 			bot_director.init_ai(bot_p)
 			_spawn_pawn(action["id"])

@@ -78,6 +78,7 @@ var selected_spec: int = 12
 var selected_bots: bool = true
 var selected_bots_shoot: bool = true
 var selected_bots_move: bool = true
+var selected_bot_skill: int = BotSkill.index_of(BotSkill.DEFAULT_LEVEL)
 
 var _mode_btns: Array[Button] = []
 var _hosting_btns: Array[Button] = []
@@ -86,6 +87,9 @@ var _round_btns: Array[Button] = []
 var _kill_btns: Array[Button] = []
 var _cap_btns: Array[Button] = []
 var _spec_btns: Array[Button] = []
+var _skill_btns: Array[Button] = []
+var _skill_wrap: Control
+var brief_bot_skill: Label
 var _bot_yes: Button
 var _bot_no: Button
 var _shoot_yes: Button
@@ -623,6 +627,22 @@ func _build_create() -> void:
 	bots.add_child(_bot_no)
 	left.add_child(bots)
 
+	_skill_wrap = VBoxContainer.new()
+	_skill_wrap.add_child(_sec("Bot skill"))
+	var skill_row := HBoxContainer.new()
+	skill_row.add_theme_constant_override("separation", 8)
+	for i in BotSkill.LEVELS.size():
+		var lbl := BotSkill.LEVELS[i].to_upper()
+		var b := _make_num(lbl, "", i)
+		b.set_meta("active", i == selected_bot_skill)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.pressed.connect(_on_skill_picked.bind(b))
+		_skill_btns.append(b)
+		skill_row.add_child(b)
+	_skill_wrap.add_child(skill_row)
+	left.add_child(_skill_wrap)
+	_paint_nums(_skill_btns)
+
 	bots_dev_wrap = VBoxContainer.new()
 	var dev_head := MarginContainer.new()
 	dev_head.add_theme_constant_override("margin_top", 22)
@@ -691,6 +711,7 @@ func _build_create() -> void:
 	sum_cap = _kv(bv, "Player slots", "12")
 	sum_spec = _kv(bv, "Extra spectators", "+12")
 	brief_bots = _kv(bv, "Bots", "On")
+	brief_bot_skill = _kv(bv, "Bot skill", BotSkill.label_for(BotSkill.DEFAULT_LEVEL))
 	brief_shoot_row = HBoxContainer.new()
 	bv.add_child(brief_shoot_row)
 	brief_bots_shoot = _kv_into(brief_shoot_row, "Bots shoot", "Yes")
@@ -1152,6 +1173,13 @@ func _on_spec_picked(b: Button) -> void:
 	_refresh_brief()
 
 
+func _on_skill_picked(b: Button) -> void:
+	selected_bot_skill = int(b.get_meta("value"))
+	_exclusive(_skill_btns, b)
+	_paint_nums(_skill_btns)
+	_refresh_brief()
+
+
 func _refresh_brief() -> void:
 	var classic := selected_mode == "classic"
 	var map_name := "Parkour Yard"
@@ -1164,12 +1192,18 @@ func _refresh_brief() -> void:
 	sum_cap.text = str(selected_cap)
 	sum_spec.text = "+%d" % selected_spec
 	brief_bots.text = "On" if selected_bots else "Off"
+	if brief_bot_skill:
+		brief_bot_skill.text = BotSkill.label_for(BotSkill.from_index(selected_bot_skill))
 	brief_bots_shoot.text = "Yes" if selected_bots_shoot else "No"
 	brief_bots_move.text = "Yes" if selected_bots_move else "No"
 	sum_total.text = "%d + %d = %d" % [selected_cap, selected_spec, selected_cap + selected_spec]
 	rounds_label.text = ("ROUNDS TO WIN" if classic else "KILLS TO WIN")
 	rounds_row.visible = classic
 	kills_row.visible = not classic
+	if _skill_wrap:
+		_skill_wrap.visible = selected_bots
+	if brief_bot_skill and brief_bot_skill.get_parent():
+		brief_bot_skill.get_parent().visible = selected_bots
 	var show_dev := DevMode.active and selected_bots
 	bots_dev_wrap.visible = show_dev
 	brief_shoot_row.visible = show_dev
@@ -1369,6 +1403,7 @@ func _create_settings() -> Dictionary:
 		"bots": selected_bots,
 		"bots_shoot": selected_bots_shoot,
 		"bots_move": selected_bots_move,
+		"bot_skill": BotSkill.from_index(selected_bot_skill),
 		"display_name": server_in.text.strip_edges(),
 	}
 
