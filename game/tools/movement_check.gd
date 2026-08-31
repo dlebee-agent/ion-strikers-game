@@ -80,6 +80,18 @@ func _initialize() -> void:
 	_ok("is grounded once landed", drop.on_ground, true)
 	_ok("vertical velocity settles", absf(drop.velocity.y) < 0.01, true)
 
+	print("-- spawned exactly on the floor --")
+	# The server sends spawn_y = 0, so the player arrives with their feet exactly
+	# on the floor plane rather than a hair above it. That is the real spawn, and
+	# dropping in from above never exercises it.
+	var spawned := Movement.new()
+	spawned.position = Vector3(-1.6, 0.0, -23.0)
+	_ok("does not start embedded", _embedded(spawned), false)
+	for i in 180:
+		spawned.update(DT, 0.0, 0.0, false, false, false, _world)
+	_ok("stays on the floor", absf(spawned.position.y) < 0.05, true)
+	_ok("is grounded, not falling", spawned.on_ground, true)
+
 	print("-- walls stop the player --")
 	# The perimeter wall sits at the arena edge; running at it must not pass it.
 	var arena: float = compiled["arena"]

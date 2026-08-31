@@ -174,6 +174,16 @@ func _air_accelerate(wish_dir: Vector3, wish_speed: float, dt: float) -> void:
 func _move_and_collide(dt: float, world: CollisionWorld) -> void:
 	var half := Vector3(PLAYER_RADIUS, player_height() * 0.5, PLAYER_RADIUS)
 	var was_on_ground := on_ground
+
+	# Free the player before moving them. A sweep that starts inside geometry has
+	# no surface to slide along, and there is no position for it to report but
+	# the one it started from, so an embedded player would simply stop existing
+	# as a moving thing. Spawns arrive with their feet exactly on the floor, so
+	# this is the normal case rather than the exceptional one.
+	var escape := world.depenetrate(position + Vector3(0.0, half.y, 0.0), half)
+	if escape != Vector3.ZERO:
+		position += escape
+
 	var start_pos := position
 	var start_vel := velocity
 
@@ -224,11 +234,10 @@ func _slide(world: CollisionWorld, half: Vector3, dt: float, from: Vector3, vel:
 		pos = _sweep(world, half, pos, target)
 
 		if _trace.start_solid:
-			# Already embedded, so there is no surface to slide along and holding
-			# position would leave the player welded in place. Letting the move
-			# through is the only way out of a bad spawn or a mover closing on
-			# them, and it beats the alternative of being stuck for good.
-			pos = target
+			# Embedded, so there is no surface to slide along. Stop here rather
+			# than letting the move through: passing an embedded player straight
+			# to the target is a hole in the world, and _move_and_collide has
+			# already pushed them out of anything they were genuinely inside.
 			break
 		if not _trace.hit():
 			break

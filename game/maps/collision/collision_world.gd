@@ -23,6 +23,12 @@ extends RefCounted
 const SURFACE_OFFSET := 0.001
 # Planes flatter than this are treated as parallel to the sweep.
 const PARALLEL_EPSILON := 0.0001
+# How close to a plane still counts as outside it rather than embedded behind it.
+# Plane normals are float32 in a PackedVector3Array while distances are float64,
+# so a box resting exactly on a surface lands a few times 1e-8 on the wrong side
+# of it. Without this slack that reads as embedded and the trace reports solid
+# for a player who is merely standing on the ground.
+const TOUCH_EPSILON := 0.0005
 
 # Planes of every brush, concatenated. A brush owns the slice described by its
 # entry in _brush_first / _brush_count.
@@ -198,16 +204,19 @@ func _clip_to_brush(index: int, start: Vector3, target: Vector3, half: Vector3,
 		var d_start := n.dot(start) - expanded
 		var d_end := n.dot(target) - expanded
 
-		if d_start > 0.0:
+		if d_start > -TOUCH_EPSILON:
 			starts_out = true
-		if d_end > 0.0:
+		if d_end > -TOUCH_EPSILON:
 			ends_out = true
 
-		# Wholly outside this plane, so wholly outside the hull.
+		# Wholly outside this plane, so wholly outside the hull. Kept strict so a
+		# sweep that is barely inside is still tested rather than discarded.
 		if d_start > 0.0 and d_end > 0.0:
 			return
-		# Wholly inside this plane; it cannot bound the crossing.
-		if d_start <= 0.0 and d_end <= 0.0:
+		# Wholly inside this plane; it cannot bound the crossing. A start that is
+		# only within the slack counts as on the plane, not behind it, so the
+		# surface a resting player stands on can still stop them.
+		if d_start <= -TOUCH_EPSILON and d_end <= -TOUCH_EPSILON:
 			continue
 
 		if d_start > d_end:
@@ -242,7 +251,7 @@ func _clip_to_brush(index: int, start: Vector3, target: Vector3, half: Vector3,
 # True when a box centred at `centre` overlaps any brush. Cheaper than a trace
 # for the crouch-to-stand check, which only needs a yes or no.
 func box_overlaps(centre: Vector3, half: Vector3) -> bool:
-	var probe := AABB(centre - half, half * 2.0)
+	var probe := AABB(centre - half, half * 2.0).grow(TOUCH_EPSILON)
 	for i: int in _candidates(probe):
 		if not _brush_bounds[i].intersects(probe):
 			continue
@@ -255,9 +264,57 @@ func box_overlaps(centre: Vector3, half: Vector3) -> bool:
 			var n := _plane_normals[first + k]
 			var d := _plane_dists[first + k]
 			var expanded := d + absf(n.x) * half.x + absf(n.y) * half.y + absf(n.z) * half.z
-			if n.dot(centre) - expanded > 0.0:
+			if n.dot(centre) - expanded > -TOUCH_EPSILON:
 				inside = false
 				break
 		if inside:
 			return true
 	return false
+
+
+# Smallest translation that frees a box embedded in solid geometry, or ZERO when
+# it is already clear. A convex hull is left fastest through the plane the box
+# sits least deep behind, so each overlapped brush contributes that one push.
+# They are applied in turn because escaping one brush can push into its
+# neighbour, which is what happens in a corner.
+func depenetrate(centre: Vector3, half: Vector3, passes := 4) -> Vector3:
+	var total := Vector3.ZERO
+	var at := centre
+	for _pass in passes:
+		var push := _escape_one(at, half)
+		if push == Vector3.ZERO:
+			break
+		total += push
+		at += push
+	return total
+
+
+func _escape_one(centre: Vector3, half: Vector3) -> Vector3:
+	var probe := AABB(centre - half, half * 2.0).grow(TOUCH_EPSILON)
+	for i: int in _candidates(probe):
+		if not _brush_bounds[i].intersects(probe):
+			continue
+		var first := _brush_first[i]
+		var count := _brush_count[i]
+		if count == 0:
+			continue
+		var shallowest := -INF
+		var escape_normal := Vector3.ZERO
+		var embedded := true
+		for k in count:
+			var n := _plane_normals[first + k]
+			var d := _plane_dists[first + k]
+			var expanded := d + absf(n.x) * half.x + absf(n.y) * half.y + absf(n.z) * half.z
+			var dist := n.dot(centre) - expanded
+			if dist > -TOUCH_EPSILON:
+				embedded = false
+				break
+			if dist > shallowest:
+				shallowest = dist
+				escape_normal = n
+		if not embedded or escape_normal == Vector3.ZERO:
+			continue
+		# Clear the surface by more than the slack, so the box lands strictly
+		# outside rather than flush against it again.
+		return escape_normal * (-shallowest + TOUCH_EPSILON * 2.0)
+	return Vector3.ZERO
