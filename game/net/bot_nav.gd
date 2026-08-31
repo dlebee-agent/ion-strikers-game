@@ -16,11 +16,6 @@ const STEP_UP := 0.35
 const MAX_DROP := 2.6
 ## Mirrors Movement.MIN_WALK_NORMAL: shallower than this is a wall, not a floor.
 const MIN_WALK_NORMAL := 0.7
-## Rise per metre of the steepest surface still walkable, so a slope can be told
-## apart from a ledge of the same height.
-const SLOPE_RISE_PER_M := 1.0204
-## Anything this flat on top is a ledge to be climbed, not a slope to be walked.
-const FLAT_NORMAL := 0.999
 ## Levels to look through in one column before giving up on it.
 const MAX_LAYERS := 8
 ## Half-thickness of the pad surface_at drops, thin enough to read a surface
@@ -42,9 +37,10 @@ var open_points: PackedVector3Array = PackedVector3Array()
 
 var _dim: int = 0
 var _height: PackedFloat32Array = PackedFloat32Array()
-## How flat each cell's surface is, so a rise bigger than a step can be judged a
-## slope the bot walks up rather than a ledge it cannot.
-var _normal_y: PackedFloat32Array = PackedFloat32Array()
+## The surface normal under each cell. A rise bigger than a step is only
+## walkable along a slope's own gradient, and the full normal is what says which
+## way that runs.
+var _normal: PackedVector3Array = PackedVector3Array()
 var _probe := TraceResult.new()
 var _open: PackedByteArray = PackedByteArray()
 var _astar: AStar3D = null
@@ -58,8 +54,8 @@ func build(p_world: CollisionWorld, p_arena: float, seeds: Array[Vector3]) -> vo
 	var count := _dim * _dim
 	_height = PackedFloat32Array()
 	_height.resize(count)
-	_normal_y = PackedFloat32Array()
-	_normal_y.resize(count)
+	_normal = PackedVector3Array()
+	_normal.resize(count)
 	_open = PackedByteArray()
 	_open.resize(count)
 
@@ -70,11 +66,11 @@ func build(p_world: CollisionWorld, p_arena: float, seeds: Array[Vector3]) -> vo
 			if found.is_empty():
 				_open[idx] = 0
 				_height[idx] = 0.0
-				_normal_y[idx] = 0.0
+				_normal[idx] = Vector3.UP
 			else:
 				_open[idx] = 1
 				_height[idx] = found[0]
-				_normal_y[idx] = found[1]
+				_normal[idx] = found[1]
 
 	_prune_to_reachable(seeds)
 	_build_graph()
@@ -168,6 +164,7 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 	var dist := sqrt(dx * dx + dz * dz)
 	var steps := maxi(1, int(ceil(dist / WALK_SAMPLE)))
 	var prev := from.y
+	var step_dir := Vector2(dx, dz).normalized() if dist > 0.0001 else Vector2.ZERO
 
 	for s in range(1, steps + 1):
 		var t := float(s) / float(steps)
@@ -179,10 +176,7 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 			return false
 		# Same allowance the graph uses, so a route over a ramp is not pulled
 		# straight into one the walk test then rejects.
-		var rise_limit := STEP_UP
-		if _normal_y[idx] < FLAT_NORMAL:
-			rise_limit += WALK_SAMPLE * SLOPE_RISE_PER_M
-		if h - prev > rise_limit:
+		if h - prev > STEP_UP + _slope_rise(_normal[idx], step_dir, WALK_SAMPLE):
 			return false
 		prev = h
 
@@ -206,7 +200,7 @@ func _index_at(x: float, z: float) -> int:
 
 
 ## Highest surface over this column that a standing body actually fits on, as
-## [feet height, surface flatness], or empty when there is nowhere to stand.
+## [feet height, surface normal], or empty when there is nowhere to stand.
 ## Walked from the top down so a catwalk wins over the floor beneath it, but a
 ## body squeezed under one still finds the floor.
 ##
@@ -230,7 +224,7 @@ func _standable(x: float, z: float) -> Array:
 			break
 		var feet := _probe.end_pos.y - half.y
 		if _probe.normal.y >= MIN_WALK_NORMAL and _fits(x, z, feet):
-			return [feet, _probe.normal.y]
+			return [feet, _probe.normal]
 		# Too steep, or no headroom. Drop under this surface and keep looking.
 		from_y = _probe.end_pos.y - 0.05
 
@@ -251,18 +245,29 @@ func _can_step(from_idx: int, to_idx: int) -> bool:
 		return false
 	if dh <= STEP_UP:
 		return true
-	# A rise taller than a step is only walkable when it is a slope rather than
-	# a ledge. A flat top at that height is something to be climbed, and bots do
-	# not jump; a sloped one is allowed as much rise as the steepest walkable
-	# surface could produce over the distance between the two cells.
-	if _normal_y[to_idx] >= FLAT_NORMAL:
-		return false
+	# A rise taller than a step is only walkable along a slope's own gradient.
+	# Allowing it merely because the destination is sloped lets a bot walk at a
+	# ramp's side wall, since the cell on top of that wall is sloped too, and
+	# they get stuck trying to climb it sideways. What the surface would actually
+	# rise over this step, given which way it tilts, is the test.
 	var fx := from_idx % _dim
 	var fz := from_idx / _dim
 	var tx := to_idx % _dim
 	var tz := to_idx / _dim
-	var run := CELL * Vector2(tx - fx, tz - fz).length()
-	return dh <= STEP_UP + run * SLOPE_RISE_PER_M
+	var step := Vector2(tx - fx, tz - fz)
+	if step.length_squared() < 0.0001:
+		return false
+	return dh <= STEP_UP + _slope_rise(_normal[to_idx], step.normalized(), CELL * step.length())
+
+
+## How far the surface climbs over a step of `run` metres in horizontal direction
+## `dir`, given its normal. Negative going downhill, zero across the gradient.
+static func _slope_rise(normal: Vector3, dir: Vector2, run: float) -> float:
+	if normal.y < 0.001:
+		return 0.0
+	# The normal leans downhill, so the height gained going `dir` is the
+	# opposite of its lean along `dir`, scaled by how steeply it tilts.
+	return -run * (normal.x * dir.x + normal.z * dir.y) / normal.y
 
 
 ## Diagonals may not clip a corner: both orthogonal cells have to be walkable

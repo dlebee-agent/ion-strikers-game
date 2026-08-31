@@ -66,6 +66,70 @@ func _initialize() -> void:
 			top = maxf(top, p.y)
 		_ok("the route climbs to the goal", top >= highest - 0.6, true)
 
+	_side_walls(level, nav)
+
 	print("")
 	print("FAILURES: %d" % _fails)
 	quit(1 if _fails > 0 else 0)
+
+
+# A ramp's side is a vertical wall. The cell on top of it is sloped, so a rule
+# that allows a big rise merely because the destination is sloped lets bots walk
+# into that wall and stick there trying to climb it sideways.
+func _side_walls(level: TbLevel, nav: BotNav) -> void:
+	print("-- ramp sides are not climbable --")
+	var res := TraceResult.new()
+	var half := Vector3(BotNav.BODY_RADIUS, BotNav.BODY_HEIGHT * 0.5, BotNav.BODY_RADIUS)
+	var sideways := 0
+	var uphill_ok := 0
+	var checked := 0
+
+	var x := level.bounds.position.x + 1.0
+	while x < level.bounds.end.x:
+		var z := level.bounds.position.z + 1.0
+		while z < level.bounds.end.z:
+			level.world.trace_box(Vector3(x, level.bounds.end.y, z),
+				Vector3(x, level.bounds.position.y, z), half, res)
+			var n := res.normal
+			if not res.hit() or n.y <= 0.72 or n.y >= 0.99:
+				z += 1.0
+				continue
+			var top := res.end_pos.y - half.y
+			var grad := Vector2(n.x, n.z)
+			if grad.length() < 0.01:
+				z += 1.0
+				continue
+			grad = grad.normalized()
+			# Across the gradient is where a ramp's side wall faces.
+			var across := Vector2(-grad.y, grad.x)
+			for side: float in [1.0, -1.0]:
+				var probe := Vector2(x, z) + across * side * 1.2
+				level.world.trace_box(Vector3(probe.x, level.bounds.end.y, probe.y),
+					Vector3(probe.x, level.bounds.position.y, probe.y), half, res)
+				if not res.hit():
+					continue
+				var beside := res.end_pos.y - half.y
+				# Only interesting where the ground beside is well below the
+				# ramp, which is exactly where its side wall is.
+				if top - beside <= BotNav.STEP_UP:
+					continue
+				checked += 1
+				if nav.walk_clear(Vector3(probe.x, beside, probe.y), Vector3(x, top, z)):
+					sideways += 1
+			# Approaching straight up the gradient must still work. The normal
+			# leans downhill, so following it is the way down and the point to
+			# start from.
+			var lower := Vector2(x, z) + grad * 1.2
+			level.world.trace_box(Vector3(lower.x, level.bounds.end.y, lower.y),
+				Vector3(lower.x, level.bounds.position.y, lower.y), half, res)
+			if res.hit():
+				var below := res.end_pos.y - half.y
+				if top - below > 0.05 and nav.walk_clear(Vector3(lower.x, below, lower.y), Vector3(x, top, z)):
+					uphill_ok += 1
+			z += 1.0
+		x += 1.0
+
+	print("    %d side-wall approaches sampled, %d judged walkable" % [checked, sideways])
+	print("    %d uphill approaches still walkable" % uphill_ok)
+	_ok("no ramp side wall is walkable", sideways, 0)
+	_ok("ramps are still climbable from below", uphill_ok > 0, true)
