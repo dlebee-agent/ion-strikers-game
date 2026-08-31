@@ -29,6 +29,9 @@ const AUTH_BAN_THRESHOLD := 10
 
 
 var _max_lobbies: int = 1
+var _join_secret: String = ""
+var _allow_direct_join: bool = true
+var _allow_enet_create: bool = true
 
 
 func configure(port: int, parent_pid: int = -1, admin_password: String = "") -> void:
@@ -44,6 +47,16 @@ func configure(port: int, parent_pid: int = -1, admin_password: String = "") -> 
 ## Must be called before _ready; the registry is built there.
 func set_max_lobbies(count: int) -> void:
 	_max_lobbies = maxi(count, 1)
+
+
+func set_join_secret(secret: String) -> void:
+	_join_secret = secret
+
+
+## Managed servers only accept JoinAuth; lobby create goes through the Game API.
+func set_managed_admission() -> void:
+	_allow_direct_join = false
+	_allow_enet_create = false
 
 
 ## Built on first use so collaborators wired up before the node enters the
@@ -149,6 +162,8 @@ func _on_receive(peer_id: int, channel: int, data: PackedByteArray) -> void:
 				_handle_create_game(peer_id, msg)
 			Protocol.Msg.JOIN_DIRECT:
 				_handle_join_direct(peer_id, msg)
+			Protocol.Msg.JOIN_AUTH:
+				_handle_join_auth(peer_id, msg)
 			Protocol.Msg.SET_TEAM:
 				_handle_set_team(peer_id, msg)
 			Protocol.Msg.TEAM_MENU:
@@ -173,6 +188,10 @@ func _on_receive(peer_id: int, channel: int, data: PackedByteArray) -> void:
 
 func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 	if not _sessions.has(peer_id):
+		return
+	if not _allow_enet_create:
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("Create via the Game API."))
 		return
 
 	var cfg := {
@@ -206,6 +225,10 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 	var session: Dictionary = _sessions[peer_id]
 	if session["authed"]:
 		return
+	if not _allow_direct_join:
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("This server requires a join token."))
+		return
 
 	var version: int = int(msg.get("v", 0))
 	if version != Protocol.PROTOCOL_VERSION:
@@ -219,7 +242,42 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 			Protocol.encode_join_error("No lobby available."))
 		return
 
-	var callsign: String = str(msg.get("name", "Player"))
+	_admit(peer_id, inst, str(msg.get("name", "Player")))
+
+
+func _handle_join_auth(peer_id: int, msg: Dictionary) -> void:
+	if not _sessions.has(peer_id):
+		return
+	var session: Dictionary = _sessions[peer_id]
+	if session["authed"]:
+		return
+
+	var version: int = int(msg.get("v", 0))
+	if version != Protocol.PROTOCOL_VERSION:
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("Protocol version mismatch."))
+		return
+
+	if not _verify_join_token(
+			str(msg.get("token_id", "")),
+			str(msg.get("game_id", "")),
+			int(msg.get("expires_at", 0)),
+			str(msg.get("signature", ""))):
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("Invalid or expired join token."))
+		return
+
+	var game_id := str(msg.get("game_id", ""))
+	if not _registry.instances.has(game_id):
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("Game no longer exists."))
+		return
+
+	_admit(peer_id, _registry.instances[game_id], str(msg.get("name", "Player")))
+
+
+func _admit(peer_id: int, inst: GameInstance, callsign: String) -> void:
+	var session: Dictionary = _sessions[peer_id]
 	var result := inst.admit_spectator(peer_id, callsign)
 	if not result["ok"]:
 		_send(peer_id, Protocol.CH_HANDSHAKE,
@@ -233,6 +291,20 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 	if result.get("cheats", false):
 		_send(peer_id, Protocol.CH_EVENTS, Protocol.encode_cheats(true))
 	print("[server] peer %d joined as '%s' (stands)" % [peer_id, callsign])
+
+
+func _verify_join_token(token_id: String, game_id: String, expires_at: int, signature: String) -> bool:
+	if _join_secret.is_empty() or token_id.is_empty() or game_id.is_empty() or signature.is_empty():
+		return false
+	if int(Time.get_unix_time_from_system()) > expires_at:
+		return false
+	var payload := "%s:%s:%d" % [token_id, game_id, expires_at]
+	var ctx := HMACContext.new()
+	if ctx.start(HashingContext.HASH_SHA256, _join_secret.to_utf8_buffer()) != OK:
+		return false
+	if ctx.update(payload.to_utf8_buffer()) != OK:
+		return false
+	return ctx.finish().hex_encode() == signature.to_lower()
 
 
 func _handle_state(peer_id: int, msg: Dictionary) -> void:

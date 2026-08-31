@@ -1,5 +1,8 @@
 node_modules/
 
+# Local dev supervisor output (tools/dev.sh).
+.dev/
+
 # Godot. The .import files are settings, not build output — mannequin.glb's
 # carries the gun-ready bake — so they are versioned; only the cache they point
 # into is not.

@@ -4,6 +4,7 @@ const MAPS: Array[Dictionary] = [
 	{"id": "parkour", "name": "Parkour Yard", "desc": "Mirrored stairs & jump blocks. Movement + jump test bed."},
 ]
 const MenuStage = preload("res://scenes/menu/menu_stage.gd")
+const _GameApiClient = preload("res://net/game_api.gd")
 
 var callsign_screen: Control
 var home_screen: Control
@@ -48,7 +49,7 @@ var _foot_binds: Label
 var _callsign: String = ""
 var _blip_t: float = 0.0
 
-var selected_hosting: String = "lan"
+var selected_hosting: String = "hosted"
 var selected_mode: String = "classic"
 var selected_map: String = "parkour"
 var selected_rounds: int = 10
@@ -74,12 +75,17 @@ var _move_yes: Button
 var _move_no: Button
 var _local_dedicated: LocalDedicated
 var _game_client: GameClient
+var _api
+var _games: Array = []
+var _list_gen: int = 0
 var _connecting := false
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_build()
+	_api = _GameApiClient.new()
+	add_child(_api)
 	UiRoot.register_screen("callsign", callsign_screen)
 	UiRoot.register_screen("menu", home_screen)
 	UiRoot.register_screen("settings", settings_screen)
@@ -128,6 +134,8 @@ func _on_screen_changed(screen_name: String) -> void:
 		callsign_input.grab_focus()
 	if screen_name == "settings":
 		settings_screen.refresh()
+	if screen_name == "join":
+		_fetch_games()
 
 
 func _build() -> void:
@@ -332,7 +340,7 @@ func _build_home() -> void:
 	cards_m.add_child(cards)
 	col.add_child(cards_m)
 
-	var join_btn := _make_big_card("Server browser", "JOIN LOBBY", "Live matches. You land in the stands and pick a side.", "NO SERVER IN THIS BUILD", false)
+	var join_btn := _make_big_card("Server browser", "JOIN LOBBY", "Live matches. You land in the stands and pick a side.", "BROWSE LIVE LOBBIES →", false)
 	join_meta = join_btn.get_meta("meta_label")
 	join_btn.pressed.connect(func() -> void: UiRoot.show("join"))
 	cards.add_child(join_btn)
@@ -397,7 +405,7 @@ func _build_join() -> void:
 	refresh.text = "REFRESH"
 	refresh.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	MenuLook.apply_ghost(refresh)
-	refresh.pressed.connect(_render_server_list)
+	refresh.pressed.connect(_fetch_games)
 	filter_row.add_child(refresh)
 
 	var quick := Button.new()
@@ -471,9 +479,7 @@ func _build_create() -> void:
 		_make_opt("LAN", "This machine. Others can join your network.", "lan"),
 		_make_opt("Hosted", "Public lobby on the Ion Strikers servers.", "hosted"),
 	]
-	_hosting_btns[0].set_meta("active", true)
-	_hosting_btns[1].disabled = true
-	_hosting_btns[1].modulate.a = 0.45
+	_hosting_btns[1].set_meta("active", true)
 	for b in _hosting_btns:
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hosting_row.add_child(b)
@@ -1166,27 +1172,135 @@ func _refresh_brief() -> void:
 func _render_server_list() -> void:
 	for c in server_list.get_children():
 		c.queue_free()
-	var empty := MenuLook.kicker("No lobbies — no Game Server in this build", MenuLook.MUTE_3, 11)
-	empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var pad := MarginContainer.new()
-	pad.add_theme_constant_override("margin_top", 26)
-	pad.add_theme_constant_override("margin_bottom", 26)
-	pad.add_child(empty)
-	server_list.add_child(pad)
-	result_line.text = "NO RESULTS"
+
+	var shown := _filtered_games()
+	if shown.is_empty():
+		var empty := MenuLook.kicker(
+			"No lobbies listed — host one, or check the Game API is running",
+			MenuLook.MUTE_3, 11)
+		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var pad := MarginContainer.new()
+		pad.add_theme_constant_override("margin_top", 26)
+		pad.add_theme_constant_override("margin_bottom", 26)
+		pad.add_child(empty)
+		server_list.add_child(pad)
+		result_line.text = "NO RESULTS"
+		return
+
+	for game in shown:
+		server_list.add_child(_make_lobby_row(game))
+	result_line.text = "%d LOBBY" % shown.size() if shown.size() == 1 else "%d LOBBIES" % shown.size()
+
+
+func _filtered_games() -> Array:
+	var q := server_filter.text.strip_edges().to_lower() if server_filter else ""
+	var out: Array = []
+	for game in _games:
+		if typeof(game) != TYPE_DICTIONARY:
+			continue
+		var g: Dictionary = game
+		if not q.is_empty():
+			var hay := ("%s %s %s" % [
+				str(g.get("name", "")),
+				str(g.get("map", "")),
+				str(g.get("mode", "")),
+			]).to_lower()
+			if hay.find(q) < 0:
+				continue
+		out.append(g)
+	return out
+
+
+func _make_lobby_row(game: Dictionary) -> Control:
+	var name_text := str(game.get("name", "")).strip_edges()
+	if name_text.is_empty():
+		name_text = str(game.get("game_id", "lobby"))
+	var mode_text := "Classic" if str(game.get("mode", "")) != "dm" else "Deathmatch"
+	var players := "%d/%d" % [int(game.get("humans", 0)), int(game.get("max", 0))]
+	var specs := "%d/%d" % [int(game.get("spectators", 0)), int(game.get("spec_max", 0))]
+	var row := _join_row(false, [
+		name_text,
+		_map_label(str(game.get("map", ""))),
+		mode_text,
+		players,
+		specs,
+	])
+	var inner := row.get_child(0) as HBoxContainer
+	if inner:
+		var join := Button.new()
+		join.text = "JOIN"
+		join.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		join.size_flags_stretch_ratio = 1.4
+		MenuLook.apply_ghost(join, 10)
+		join.pressed.connect(_on_join_game.bind(str(game.get("game_id", ""))))
+		inner.add_child(join)
+	return row
+
+
+func _map_label(map_id: String) -> String:
+	for m in MAPS:
+		if str(m["id"]) == map_id:
+			return str(m["name"])
+	return map_id if not map_id.is_empty() else "—"
+
+
+func _fetch_games() -> void:
+	_list_gen += 1
+	var gen := _list_gen
+	result_line.text = "LOADING…"
+	var res: Dictionary = await _api.list_games()
+	if gen != _list_gen or not is_inside_tree():
+		return
+	if not res.get("ok", false):
+		_games = []
+		_render_server_list()
+		result_line.text = str(res.get("error", "Could not list lobbies."))
+		return
+	var games = res.get("games", [])
+	_games = games if games is Array else []
+	_render_server_list()
+	if join_meta:
+		var n: int = _games.size()
+		join_meta.text = ("1 LIVE LOBBY →" if n == 1 else "%d LIVE LOBBIES →" % n) if n > 0 else "BROWSE LIVE LOBBIES →"
 
 
 func _on_quick_join() -> void:
+	var shown := _filtered_games()
+	for game in shown:
+		if not _lobby_joinable(game):
+			continue
+		_on_join_game(str(game.get("game_id", "")))
+		return
 	result_line.text = "NO SERVER TO JOIN"
-	launch_note.text = "No Game Server in this build."
 	UiRoot.show("create")
 
 
-func _on_launch() -> void:
-	if selected_hosting != "lan":
-		launch_note.text = "Hosted games need the Game API — not in this build."
+func _lobby_joinable(game: Dictionary) -> bool:
+	var humans := int(game.get("humans", 0))
+	var cap := int(game.get("max", 0)) + int(game.get("spec_max", 0))
+	return cap <= 0 or humans < cap
+
+
+func _on_join_game(game_id: String) -> void:
+	if game_id.is_empty() or _connecting:
 		return
+	_connecting = true
+	result_line.text = "JOINING…"
+	var res: Dictionary = await _api.join_game(game_id)
+	if not is_inside_tree():
+		return
+	if not res.get("ok", false):
+		_connecting = false
+		result_line.text = str(res.get("error", "Join failed."))
+		return
+	_connect_hosted(res)
+
+
+func _on_launch() -> void:
 	if _connecting:
+		return
+	if selected_hosting == "hosted":
+		await _launch_hosted()
 		return
 	_connecting = true
 	launch_note.text = "Starting local server..."
@@ -1205,7 +1319,29 @@ func _on_launch() -> void:
 
 	launch_note.text = "Connecting..."
 	_game_client = GameClient.new()
-	_game_client.set_create_settings({
+	_game_client.set_create_settings(_create_settings())
+	add_child(_game_client)
+	_game_client.connected_to_lobby.connect(_on_lobby_joined)
+	_game_client.connection_failed.connect(_on_connect_failed)
+	_game_client.connect_to_server("127.0.0.1", port, _callsign)
+
+
+func _launch_hosted() -> void:
+	_connecting = true
+	launch_note.text = "Creating lobby..."
+	var res: Dictionary = await _api.create_game(_create_settings())
+	if not is_inside_tree():
+		return
+	if not res.get("ok", false):
+		_connecting = false
+		launch_note.text = str(res.get("error", "Create failed."))
+		return
+	launch_note.text = "Connecting..."
+	_connect_hosted(res)
+
+
+func _create_settings() -> Dictionary:
+	return {
 		"map": selected_map,
 		"mode": selected_mode,
 		"rounds": selected_rounds,
@@ -1216,11 +1352,22 @@ func _on_launch() -> void:
 		"bots_shoot": selected_bots_shoot,
 		"bots_move": selected_bots_move,
 		"display_name": server_in.text.strip_edges(),
-	})
+	}
+
+
+func _connect_hosted(info: Dictionary) -> void:
+	var token: Variant = info.get("join_token", {})
+	if typeof(token) != TYPE_DICTIONARY or (token as Dictionary).is_empty():
+		_connecting = false
+		launch_note.text = "Game API returned no join token."
+		result_line.text = launch_note.text
+		return
+	_game_client = GameClient.new()
+	_game_client.set_join_auth(token)
 	add_child(_game_client)
 	_game_client.connected_to_lobby.connect(_on_lobby_joined)
 	_game_client.connection_failed.connect(_on_connect_failed)
-	_game_client.connect_to_server("127.0.0.1", port, _callsign)
+	_game_client.connect_to_server(str(info.get("host", "127.0.0.1")), int(info.get("port", 7777)), _callsign)
 
 
 func _on_lobby_joined(init_data: Dictionary) -> void:
@@ -1248,6 +1395,8 @@ func _on_lobby_joined(init_data: Dictionary) -> void:
 func _on_connect_failed(reason: String) -> void:
 	_connecting = false
 	launch_note.text = reason
+	if result_line:
+		result_line.text = reason
 	_cleanup_launch()
 
 

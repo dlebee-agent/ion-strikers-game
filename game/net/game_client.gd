@@ -31,6 +31,7 @@ var _target_port: int = 7777
 
 var _create_settings: Dictionary = {}
 var _should_create := false
+var _join_token: Dictionary = {}
 
 var my_id: int = 0
 var rtt_ms: float = 0.0
@@ -58,6 +59,10 @@ func connect_to_server(host: String, port: int, callsign: String) -> void:
 func set_create_settings(settings: Dictionary) -> void:
 	_create_settings = settings
 	_should_create = true
+
+
+func set_join_auth(token: Dictionary) -> void:
+	_join_token = token
 
 
 func disconnect_from_server() -> void:
@@ -156,10 +161,14 @@ func _process(_dt: float) -> void:
 
 		if event_type == ENetConnection.EVENT_CONNECT:
 			_connected = true
-			if _should_create:
-				_send_create_game()
-			var buf := Protocol.encode_join_direct(_callsign)
-			_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
+			if not _join_token.is_empty():
+				var auth := Protocol.encode_join_auth(_callsign, _join_token)
+				_peer.send(Protocol.CH_HANDSHAKE, auth, ENetPacketPeer.FLAG_RELIABLE)
+			else:
+				if _should_create:
+					_send_create_game()
+				var buf := Protocol.encode_join_direct(_callsign)
+				_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
 
 		elif event_type == ENetConnection.EVENT_DISCONNECT:
 			_connected = false

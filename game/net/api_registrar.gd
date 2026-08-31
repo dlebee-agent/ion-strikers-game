@@ -67,6 +67,11 @@ func _process(dt: float) -> void:
 		_do_heartbeat()
 
 
+func push_now() -> void:
+	if _registered:
+		_do_heartbeat()
+
+
 func _do_register() -> void:
 	var body := JSON.stringify({
 		"server_id": identity.server_id,

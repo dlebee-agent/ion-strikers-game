@@ -19,6 +19,7 @@ func _start_server(args: PackedStringArray) -> void:
 	var max_lobbies := 1
 	var server_id := ""
 	var public_host := "127.0.0.1"
+	var join_secret := ""
 
 	for i in args.size():
 		if args[i] == "--port" and i + 1 < args.size():
@@ -41,6 +42,8 @@ func _start_server(args: PackedStringArray) -> void:
 			max_lobbies = int(args[i + 1])
 		elif args[i] == "--server-id" and i + 1 < args.size():
 			server_id = args[i + 1]
+		elif args[i] == "--join-secret" and i + 1 < args.size():
+			join_secret = args[i + 1]
 
 	if admin_password.is_empty():
 		var crypto := Crypto.new()
@@ -55,6 +58,10 @@ func _start_server(args: PackedStringArray) -> void:
 
 	# Only servers that register need an identity; a local New Game does not.
 	if register and not api_url.is_empty():
+		if join_secret.is_empty():
+			join_secret = "dev-join-secret"
+		server_node.set_join_secret(join_secret)
+		server_node.set_managed_admission()
 		var identity := ServerIdentity.new()
 		identity.load_or_create(server_id)
 		print("[server] identity %s (create=%s)" % [identity.server_id, allow_dynamic_create])
@@ -81,6 +88,7 @@ func _start_server(args: PackedStringArray) -> void:
 		registrar.configure(server_node.get_registry())
 		# The handshake is what unlocks the management surface.
 		registrar.api_key_received.connect(mgmt.set_api_public_key)
+		mgmt.lobby_created.connect(func(_inst: GameInstance) -> void: registrar.push_now())
 		server_node.add_child(registrar)
 
 	get_tree().root.add_child.call_deferred(server_node)

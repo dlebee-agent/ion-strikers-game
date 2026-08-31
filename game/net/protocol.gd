@@ -49,6 +49,7 @@ enum Msg {
 	SET_CHEATS,
 	CHEATS,
 	SET_CHEATS_DENIED,
+	JOIN_AUTH,
 }
 
 enum Team { TEAM_NONE = 0, TEAM_BLUE = 1, TEAM_RED = 2 }
@@ -182,6 +183,13 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 		Msg.JOIN_DIRECT:
 			d["v"] = b.get_u8()
 			d["name"] = _read_string(b)
+		Msg.JOIN_AUTH:
+			d["v"] = b.get_u8()
+			d["name"] = _read_string(b)
+			d["token_id"] = _read_string(b)
+			d["game_id"] = _read_string(b)
+			d["expires_at"] = b.get_64()
+			d["signature"] = _read_string(b)
 		Msg.JOIN_ERROR:
 			d["reason"] = _read_string(b)
 		Msg.INIT:
@@ -413,6 +421,19 @@ static func encode_join_direct(callsign: String) -> PackedByteArray:
 	b.put_u8(0)
 	b.put_u8(PROTOCOL_VERSION)
 	_write_string(b, callsign)
+	return b.data_array
+
+
+static func encode_join_auth(callsign: String, token: Dictionary) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.JOIN_AUTH)
+	b.put_u8(0)
+	b.put_u8(PROTOCOL_VERSION)
+	_write_string(b, callsign)
+	_write_string(b, str(token.get("token_id", "")))
+	_write_string(b, str(token.get("game_id", "")))
+	b.put_64(int(token.get("expires_at", 0)))
+	_write_string(b, str(token.get("signature", "")))
 	return b.data_array
 
 
