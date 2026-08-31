@@ -124,16 +124,42 @@ func _ready() -> void:
 
 
 func _build_map() -> void:
-	var map_def: Dictionary
-	if _map_id == "parkour":
-		map_def = ParkourMap.definition()
+	if MapCatalog.is_community(_map_id):
+		_build_community_map()
 	else:
-		map_def = ParkourMap.definition()
+		_build_builtin_map()
 
-	var compiled := MapEngine.compile(map_def)
+
+func _build_builtin_map() -> void:
+	var compiled := MapEngine.compile(ParkourMap.definition())
 	_colliders = MapBuilder.build_visual(self, compiled)
 	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
+
+
+func _build_community_map() -> void:
+	var level := MapCatalog.load_community(_map_id)
+	if not level.ok():
+		push_error("[client] %s did not import (%s); falling back to parkour" % [
+			_map_id, ", ".join(level.warnings)])
+		_build_builtin_map()
+		return
+	for w: String in level.warnings:
+		print("[client] %s: %s" % [_map_id, w])
+
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = level.mesh
+	# Imported geometry is the level's own art, so it lights and shadows like
+	# any other world surface.
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(mesh)
+
+	var ambience := MapCatalog.ambience_for(level)
+	MapBuilder.build_ambience(self, ambience)
+
+	_colliders = level.colliders
+	_world = level.world
+	_arena_size = level.arena
 
 
 func _start_spectate_watch() -> void:

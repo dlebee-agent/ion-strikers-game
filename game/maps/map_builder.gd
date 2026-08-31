@@ -33,6 +33,13 @@ static func build_world(compiled: Dictionary) -> CollisionWorld:
 	return world
 
 
+# Lighting and sky, without any of the geometry build_visual also does.
+# Imported levels bring their own brushes but still want the same treatment.
+static func build_ambience(parent: Node3D, compiled: Dictionary) -> void:
+	_build_lighting(parent)
+	_build_environment(parent, compiled)
+
+
 static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
 	var arena: float = compiled["arena"]
 

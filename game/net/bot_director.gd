@@ -57,8 +57,8 @@ func configure(colliders: Array[AABB], arena: float, spawns: Dictionary) -> void
 		if points.is_empty():
 			continue
 		var sum := Vector3.ZERO
-		for entry: Array in points:
-			var pos := Vector3(float(entry[0]), 0.0, float(entry[1]))
+		for entry: Dictionary in points:
+			var pos: Vector3 = entry["position"]
 			seeds.append(pos)
 			sum += pos
 		var team_val := Protocol.TEAM_BLUE if key == "blue" else Protocol.TEAM_RED

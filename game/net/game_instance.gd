@@ -26,6 +26,7 @@ var pawns: Dictionary = {}          # id → ServerPawn
 var bot_director: BotDirector
 var spawns: Dictionary = {}
 var colliders: Array[AABB] = []
+var world: CollisionWorld = null
 var arena_size: float = 28.0
 
 var _tick: int = 0
@@ -86,15 +87,40 @@ func _init(cfg: Dictionary = {}) -> void:
 
 
 func setup_map() -> void:
-	var map_def: Dictionary = ParkourMap.definition()
-	var compiled := MapEngine.compile(map_def)
-	colliders = MapBuilder.build_colliders(compiled)
-	MapBuilder.build_physics(self, compiled)
-	spawns = compiled.get("spawns", {})
-	arena_size = compiled.get("arena", 28.0)
+	if MapCatalog.is_community(map_id):
+		_setup_community_map()
+	else:
+		_setup_builtin_map()
 	bot_director.configure(colliders, arena_size, spawns)
 
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
+
+
+func _setup_builtin_map() -> void:
+	var map_def: Dictionary = ParkourMap.definition()
+	var compiled := MapEngine.compile(map_def)
+	colliders = MapBuilder.build_colliders(compiled)
+	world = MapBuilder.build_world(compiled)
+	MapBuilder.build_physics(self, compiled)
+	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
+	arena_size = compiled.get("arena", 28.0)
+
+
+func _setup_community_map() -> void:
+	var level := MapCatalog.load_community(map_id)
+	if not level.ok():
+		push_error("[server] %s did not import (%s); falling back to parkour" % [
+			map_id, ", ".join(level.warnings)])
+		_setup_builtin_map()
+		return
+	for w: String in level.warnings:
+		print("[server] %s: %s" % [map_id, w])
+	colliders = level.colliders
+	world = level.world
+	spawns = level.spawns
+	arena_size = level.arena
+	print("[server] %s: %d brushes, %d spawns" % [
+		map_id, world.brush_count(), level.spawn_count()])
 
 
 func tick(dt: float) -> void:
@@ -849,16 +875,21 @@ func _spawn_pawn(pid: int, protection_ms: float = SPAWN_PROTECTION_MS) -> void:
 		return
 
 	var team_key := "blue" if p.team == Protocol.TEAM_BLUE else "red"
-	var spawn_list: Array = spawns.get(team_key, [[0.0, 0.0]])
-	var pick: Array = spawn_list[randi() % spawn_list.size()]
-	var sx: float = float(pick[0]) + (randf() - 0.5) * 1.4
-	var sz: float = float(pick[1]) + (randf() - 0.5) * 1.4
-	var yaw := 180.0 if p.team == Protocol.TEAM_BLUE else 0.0
+	var fallback := [{"position": Vector3.ZERO, "yaw": 180.0 if p.team == Protocol.TEAM_BLUE else 0.0}]
+	var spawn_list: Array = spawns.get(team_key, fallback)
+	if spawn_list.is_empty():
+		spawn_list = fallback
+	var pick: Dictionary = spawn_list[randi() % spawn_list.size()]
+	var at: Vector3 = pick["position"]
+	# Scatter across the point so two players spawning together do not arrive
+	# inside one another, but only horizontally: nudging the height would drop
+	# someone through a platform or float them above it.
+	var jitter := Vector3((randf() - 0.5) * 1.4, 0.0, (randf() - 0.5) * 1.4)
 
 	var pawn := ServerPawn.new()
 	pawn.participant_id = pid
-	pawn.position = Vector3(sx, 0.0, sz)
-	pawn.yaw = yaw
+	pawn.position = at + jitter
+	pawn.yaw = float(pick["yaw"])
 	pawn.hp = 100
 	pawn.alive = true
 	pawn.protected_until = _now + protection_ms / 1000.0
