@@ -7,6 +7,12 @@ const BUILTIN_MAPS: Array[Dictionary] = [
 const MenuStage = preload("res://scenes/menu/menu_stage.gd")
 const _GameApiClient = preload("res://net/game_api.gd")
 
+## Shared height for every control on the bot row, so the switches and the skill
+## dropdown sitting beside each other line up.
+const BOT_CTRL_H := 44
+## One per BotSkill.LEVELS, in the same order.
+const SKILL_BLURBS: Array[String] = ["relaxed", "fair fight", "sharp", "brutal"]
+
 
 # Built-in maps plus whatever .map files are sitting in maps/community. The
 # community ones are imported to read their name, which also surfaces a broken
@@ -87,9 +93,8 @@ var _round_btns: Array[Button] = []
 var _kill_btns: Array[Button] = []
 var _cap_btns: Array[Button] = []
 var _spec_btns: Array[Button] = []
-var _skill_btns: Array[Button] = []
+var _skill_select: OptionButton
 var _skill_wrap: Control
-var brief_bot_skill: Label
 var _bot_yes: Button
 var _bot_no: Button
 var _shoot_yes: Button
@@ -614,78 +619,72 @@ func _build_create() -> void:
 	slots.add_child(spec_col)
 	_paint_nums(_spec_btns)
 
-	left.add_child(_sec("Fill empty slots with bots"))
+	# Bots share one row with their skill picker: on its own the switch is two
+	# buttons against a whole line of dead space, and the skill only matters
+	# once the switch is on, so they read better as one decision than three.
+	var bots_row := HBoxContainer.new()
+	bots_row.add_theme_constant_override("separation", 16)
+	var bots_row_m := MarginContainer.new()
+	bots_row_m.add_theme_constant_override("margin_top", 22)
+	bots_row_m.add_child(bots_row)
+	left.add_child(bots_row_m)
+
+	var bot_col := VBoxContainer.new()
+	bot_col.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	bot_col.add_child(_sec("Fill slots with bots", true))
 	var bots := HBoxContainer.new()
 	bots.add_theme_constant_override("separation", 10)
 	_bot_yes = _make_yn("YES", true)
 	_bot_no = _make_yn("NO", false)
+	_bot_yes.custom_minimum_size.y = BOT_CTRL_H
+	_bot_no.custom_minimum_size.y = BOT_CTRL_H
 	_bot_yes.set_meta("active", selected_bots)
 	_bot_no.set_meta("active", not selected_bots)
 	_bot_yes.pressed.connect(func() -> void: selected_bots = true; _paint_yn(); _refresh_brief())
 	_bot_no.pressed.connect(func() -> void: selected_bots = false; _paint_yn(); _refresh_brief())
 	bots.add_child(_bot_yes)
 	bots.add_child(_bot_no)
-	left.add_child(bots)
+	bot_col.add_child(bots)
+	bots_row.add_child(bot_col)
 
+	# A dropdown rather than four buttons: it keeps the whole bot section on one
+	# line, and difficulty is a pick-one-and-forget setting, not something worth
+	# spending a quarter of the panel width on.
 	_skill_wrap = VBoxContainer.new()
-	_skill_wrap.add_child(_sec("Bot skill"))
-	var skill_row := HBoxContainer.new()
-	skill_row.add_theme_constant_override("separation", 8)
+	_skill_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_skill_wrap.add_child(_sec("Bot skill", true))
+	_skill_select = OptionButton.new()
+	_skill_select.custom_minimum_size = Vector2(0, BOT_CTRL_H)
+	_skill_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	MenuLook.apply_dropdown(_skill_select)
 	for i in BotSkill.LEVELS.size():
-		var lbl := BotSkill.LEVELS[i].to_upper()
-		var b := _make_num(lbl, "", i)
-		b.set_meta("active", i == selected_bot_skill)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.pressed.connect(_on_skill_picked.bind(b))
-		_skill_btns.append(b)
-		skill_row.add_child(b)
-	_skill_wrap.add_child(skill_row)
-	left.add_child(_skill_wrap)
-	_paint_nums(_skill_btns)
+		_skill_select.add_item("%s · %s" % [
+			BotSkill.LEVELS[i].to_upper(), SKILL_BLURBS[i],
+		])
+		_skill_select.set_item_metadata(i, i)
+	_skill_select.select(selected_bot_skill)
+	_skill_select.item_selected.connect(_on_skill_selected)
+	_skill_wrap.add_child(_skill_select)
+	bots_row.add_child(_skill_wrap)
 
-	bots_dev_wrap = VBoxContainer.new()
-	var dev_head := MarginContainer.new()
-	dev_head.add_theme_constant_override("margin_top", 22)
-	dev_head.add_theme_constant_override("margin_bottom", 10)
-	var head_row := HBoxContainer.new()
-	head_row.add_theme_constant_override("separation", 8)
-	head_row.add_child(MenuLook.kicker("Bot behaviour"))
-	var tag := MenuLook.kicker("DEV", Color("#ffd24a"), 9)
-	var tag_box := PanelContainer.new()
-	var ts := StyleBoxFlat.new()
-	ts.bg_color = Color(1.0, 0.824, 0.29, 0.16)
-	ts.border_color = Color(1.0, 0.824, 0.29, 0.5)
-	ts.set_border_width_all(1)
-	ts.set_corner_radius_all(5)
-	ts.content_margin_left = 6
-	ts.content_margin_right = 6
-	ts.content_margin_top = 1
-	ts.content_margin_bottom = 1
-	tag_box.add_theme_stylebox_override("panel", ts)
-	tag_box.add_child(tag)
-	head_row.add_child(tag_box)
-	dev_head.add_child(head_row)
-	bots_dev_wrap.add_child(dev_head)
-
-	# Two switches side by side: a bot that neither shoots nor moves is a
-	# stationary target, and each half is useful on its own.
-	var dev_toggles := HBoxContainer.new()
-	dev_toggles.add_theme_constant_override("separation", 28)
+	# The dev switches join the same line and carry their own DEV badge, so
+	# nothing above them has to announce that they are developer-only.
+	bots_dev_wrap = HBoxContainer.new()
+	bots_dev_wrap.add_theme_constant_override("separation", 16)
 
 	_shoot_yes = _make_yn("YES", true)
 	_shoot_no = _make_yn("NO", false)
 	_shoot_yes.pressed.connect(func() -> void: selected_bots_shoot = true; _paint_yn(); _refresh_brief())
 	_shoot_no.pressed.connect(func() -> void: selected_bots_shoot = false; _paint_yn(); _refresh_brief())
-	dev_toggles.add_child(_yn_group("Shoot back", _shoot_yes, _shoot_no))
+	bots_dev_wrap.add_child(_dev_yn_col("Shoot back", _shoot_yes, _shoot_no))
 
 	_move_yes = _make_yn("YES", true)
 	_move_no = _make_yn("NO", false)
 	_move_yes.pressed.connect(func() -> void: selected_bots_move = true; _paint_yn(); _refresh_brief())
 	_move_no.pressed.connect(func() -> void: selected_bots_move = false; _paint_yn(); _refresh_brief())
-	dev_toggles.add_child(_yn_group("Move", _move_yes, _move_no))
+	bots_dev_wrap.add_child(_dev_yn_col("Move", _move_yes, _move_no))
 
-	bots_dev_wrap.add_child(dev_toggles)
-	left.add_child(bots_dev_wrap)
+	bots_row.add_child(bots_dev_wrap)
 	_paint_yn()
 
 	var brief := PanelContainer.new()
@@ -711,7 +710,6 @@ func _build_create() -> void:
 	sum_cap = _kv(bv, "Player slots", "12")
 	sum_spec = _kv(bv, "Extra spectators", "+12")
 	brief_bots = _kv(bv, "Bots", "On")
-	brief_bot_skill = _kv(bv, "Bot skill", BotSkill.label_for(BotSkill.DEFAULT_LEVEL))
 	brief_shoot_row = HBoxContainer.new()
 	bv.add_child(brief_shoot_row)
 	brief_bots_shoot = _kv_into(brief_shoot_row, "Bots shoot", "Yes")
@@ -1009,18 +1007,47 @@ func _make_yn(text: String, is_yes: bool) -> Button:
 	return btn
 
 
-## A captioned YES/NO pair, so several of them can sit in one row without the
-## reader losing track of which switch is which.
-func _yn_group(caption: String, yes_btn: Button, no_btn: Button) -> VBoxContainer:
+## A captioned YES/NO pair badged as developer-only. The caption metrics match
+## _sec() so a column of these lines up with the ordinary pickers beside it.
+func _dev_yn_col(caption: String, yes_btn: Button, no_btn: Button) -> VBoxContainer:
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 6)
-	col.add_child(MenuLook.kicker(caption, MenuLook.MUTE_3, 9))
+	col.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+
+	var cap := MarginContainer.new()
+	cap.add_theme_constant_override("margin_bottom", 10)
+	var cap_row := HBoxContainer.new()
+	cap_row.add_theme_constant_override("separation", 6)
+	cap_row.add_child(MenuLook.kicker(caption, MenuLook.MUTE_2, 10))
+	cap_row.add_child(_dev_tag())
+	cap.add_child(cap_row)
+	col.add_child(cap)
+
+	yes_btn.custom_minimum_size.y = BOT_CTRL_H
+	no_btn.custom_minimum_size.y = BOT_CTRL_H
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	row.add_child(yes_btn)
 	row.add_child(no_btn)
 	col.add_child(row)
 	return col
+
+
+## The small amber badge marking a control as developer-only.
+func _dev_tag() -> PanelContainer:
+	var wrap := PanelContainer.new()
+	wrap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(1.0, 0.824, 0.29, 0.16)
+	s.border_color = Color(1.0, 0.824, 0.29, 0.5)
+	s.set_border_width_all(1)
+	s.set_corner_radius_all(4)
+	s.content_margin_left = 5
+	s.content_margin_right = 5
+	s.content_margin_top = 0
+	s.content_margin_bottom = 0
+	wrap.add_theme_stylebox_override("panel", s)
+	wrap.add_child(MenuLook.kicker("DEV", Color("#ffd24a"), 8))
+	return wrap
 
 
 func _sec(text: String, no_top := false) -> MarginContainer:
@@ -1173,10 +1200,8 @@ func _on_spec_picked(b: Button) -> void:
 	_refresh_brief()
 
 
-func _on_skill_picked(b: Button) -> void:
-	selected_bot_skill = int(b.get_meta("value"))
-	_exclusive(_skill_btns, b)
-	_paint_nums(_skill_btns)
+func _on_skill_selected(index: int) -> void:
+	selected_bot_skill = int(_skill_select.get_item_metadata(index))
 	_refresh_brief()
 
 
@@ -1191,9 +1216,7 @@ func _refresh_brief() -> void:
 	sum_limit.text = ("first to %d" % selected_rounds) if classic else ("first to %d kills" % selected_kills)
 	sum_cap.text = str(selected_cap)
 	sum_spec.text = "+%d" % selected_spec
-	brief_bots.text = "On" if selected_bots else "Off"
-	if brief_bot_skill:
-		brief_bot_skill.text = BotSkill.label_for(BotSkill.from_index(selected_bot_skill))
+	brief_bots.text = ("On · %s" % BotSkill.label_for(BotSkill.from_index(selected_bot_skill))) if selected_bots else "Off"
 	brief_bots_shoot.text = "Yes" if selected_bots_shoot else "No"
 	brief_bots_move.text = "Yes" if selected_bots_move else "No"
 	sum_total.text = "%d + %d = %d" % [selected_cap, selected_spec, selected_cap + selected_spec]
@@ -1202,8 +1225,6 @@ func _refresh_brief() -> void:
 	kills_row.visible = not classic
 	if _skill_wrap:
 		_skill_wrap.visible = selected_bots
-	if brief_bot_skill and brief_bot_skill.get_parent():
-		brief_bot_skill.get_parent().visible = selected_bots
 	var show_dev := DevMode.active and selected_bots
 	bots_dev_wrap.visible = show_dev
 	brief_shoot_row.visible = show_dev
