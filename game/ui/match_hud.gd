@@ -712,7 +712,7 @@ func set_special(armed: bool, charging: bool = false, charge: float = 0.0,
 		_spec_glow_t = 0.2
 	_apply_special_visuals()
 	_set_ready_pulse(armed and not charging)
-	set_process(_wants_special_anim())
+	set_process(_wants_hud_process())
 
 
 func show_meteor_warning(show: bool) -> void:
@@ -752,15 +752,10 @@ func add_chat_message(name_text: String, text: String, team: int, team_only: boo
 		row.add_child(body)
 
 	_chat_log.add_child(row)
-	_trim_chat_log()
 	if not _match_over_active:
-		var tw := create_tween()
-		tw.tween_interval(CHAT_TTL)
-		tw.tween_callback(func() -> void:
-			if _match_over_active or not is_instance_valid(row):
-				return
-			_drop_chat_row(row)
-		)
+		row.set_meta("expires_at", Time.get_ticks_msec() + int(CHAT_TTL * 1000.0))
+		set_process(true)
+	_trim_chat_log()
 
 
 func open_chat(team_only: bool) -> void:
@@ -917,6 +912,28 @@ func _trim_chat_log() -> void:
 		_drop_chat_row(_chat_log.get_child(0))
 
 
+func _expire_old_chat() -> void:
+	if _match_over_active or not _chat_log:
+		return
+	var now := Time.get_ticks_msec()
+	var i := 0
+	while i < _chat_log.get_child_count():
+		var row := _chat_log.get_child(i)
+		if row.has_meta("expires_at") and now >= int(row.get_meta("expires_at")):
+			_drop_chat_row(row)
+		else:
+			i += 1
+
+
+func _chat_needs_expiry() -> bool:
+	if _match_over_active or _chat_log == null:
+		return false
+	for row in _chat_log.get_children():
+		if row.has_meta("expires_at"):
+			return true
+	return false
+
+
 func _drop_chat_row(row: Node) -> void:
 	if not is_instance_valid(row) or row.get_parent() != _chat_log:
 		return
@@ -1006,7 +1023,8 @@ func _process(dt: float) -> void:
 			dirty = true
 	if dirty:
 		_apply_special_visuals()
-	if not _wants_special_anim():
+	_expire_old_chat()
+	if not _wants_hud_process():
 		set_process(false)
 
 
@@ -1096,6 +1114,10 @@ func _apply_special_visuals() -> void:
 			st.border_color = PIP_EMPTY_BORDER
 			st.shadow_color = Color(0, 0, 0, 0)
 			st.shadow_size = 0
+
+
+func _wants_hud_process() -> bool:
+	return _wants_special_anim() or _chat_needs_expiry()
 
 
 func _wants_special_anim() -> bool:
