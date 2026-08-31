@@ -7,4 +7,6 @@ node_modules/
 # carries the gun-ready bake — so they are versioned; only the cache they point
 # into is not.
 game/.godot/
-game/export_presets.cfg
+
+# Export output, whether from the release workflow or a local godot --export.
+dist/

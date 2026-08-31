@@ -1,0 +1,500 @@
+name: Release Game
+
+# Tags only, namespaced so each deliverable gets its own pipeline: game/<version>
+# builds the client and dedicated server, leaving game-api/<version> free for the
+# API's container image. workflow_dispatch exists for re-running a tag whose
+# build failed for an infrastructure reason.
+on:
+  push:
+    tags:
+      - 'game/*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Full release tag, including the prefix (e.g. game/0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-game-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  GODOT_VERSION: '4.7.2'
+  GODOT_RELEASE: 'stable'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Linux + Windows. Godot exports both from the same Linux runner, so one
+  # engine + template download covers four artifacts.
+  # -------------------------------------------------------------------------
+  build-desktop:
+    name: Export Linux + Windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip the namespace so artifact names carry only the version.
+          VERSION="${TAG#game/}"
+          if [ "$VERSION" = "$TAG" ] || [ -z "$VERSION" ]; then
+            echo "expected a game/<version> tag, got '${TAG}'" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "resolved ${TAG} -> ${VERSION}"
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} and export templates
+        run: |
+          set -euo pipefail
+          TAG="${GODOT_VERSION}-${GODOT_RELEASE}"
+          BASE="https://github.com/godotengine/godot/releases/download/${TAG}"
+
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" \
+            "${BASE}/Godot_v${TAG}_linux.x86_64.zip"
+          curl -fsSL -o "$RUNNER_TEMP/templates.tpz" \
+            "${BASE}/Godot_v${TAG}_export_templates.tpz"
+
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/godot/Godot_v${TAG}_linux.x86_64" \
+            "$RUNNER_TEMP/bin/godot"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+
+          # Godot only accepts templates whose directory name matches the engine
+          # build string exactly.
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          mkdir -p "$TEMPLATE_DIR"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/tpz"
+          mv "$RUNNER_TEMP/tpz/templates"/* "$TEMPLATE_DIR/"
+
+          godot --version
+
+      - name: Import project
+        run: |
+          set -euo pipefail
+          # A cold .godot/ cache makes the first import noisy and it can exit
+          # non-zero on warnings alone; a genuinely broken import fails the
+          # export step below instead.
+          godot --headless --path game --import || true
+
+      - name: Export
+        id: export
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/stage"
+
+          LINUX_CLIENT="ion-strikers-${VERSION}-linux-x86_64"
+          LINUX_SERVER="ion-strikers-server-${VERSION}-linux-x86_64"
+          WIN_CLIENT="ion-strikers-${VERSION}-windows-x86_64"
+          WIN_SERVER="ion-strikers-server-${VERSION}-windows-x86_64"
+          for name in "$LINUX_CLIENT" "$LINUX_SERVER" "$WIN_CLIENT" "$WIN_SERVER"; do
+            mkdir -p "$STAGE/$name"
+          done
+
+          godot --headless --path game --export-release "Linux Client" \
+            "$STAGE/$LINUX_CLIENT/ion-strikers.x86_64"
+          godot --headless --path game --export-release "Linux Server" \
+            "$STAGE/$LINUX_SERVER/ion-strikers-server.x86_64"
+          godot --headless --path game --export-release "Windows Client" \
+            "$STAGE/$WIN_CLIENT/ion-strikers.exe"
+          godot --headless --path game --export-release "Windows Server" \
+            "$STAGE/$WIN_SERVER/ion-strikers-server.exe"
+
+          chmod +x "$STAGE/$LINUX_CLIENT/ion-strikers.x86_64"
+          chmod +x "$STAGE/$LINUX_SERVER/ion-strikers-server.x86_64"
+          install -m 0755 tools/release/run-server.sh "$STAGE/$LINUX_SERVER/"
+          install -m 0644 tools/release/run-server.bat "$STAGE/$WIN_SERVER/"
+
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "linux_client=$LINUX_CLIENT" >> "$GITHUB_OUTPUT"
+          echo "linux_server=$LINUX_SERVER" >> "$GITHUB_OUTPUT"
+          echo "win_client=$WIN_CLIENT" >> "$GITHUB_OUTPUT"
+          echo "win_server=$WIN_SERVER" >> "$GITHUB_OUTPUT"
+
+          find "$STAGE" -mindepth 2 -maxdepth 2 -printf '%s\t%p\n' | sort
+
+      - name: Package archives
+        env:
+          STAGE: ${{ steps.export.outputs.stage }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+          for name in "${{ steps.export.outputs.linux_client }}" \
+                      "${{ steps.export.outputs.linux_server }}"; do
+            tar -czf "$GITHUB_WORKSPACE/dist/${name}.tar.gz" -C "$STAGE" "$name"
+          done
+
+          for name in "${{ steps.export.outputs.win_client }}" \
+                      "${{ steps.export.outputs.win_server }}"; do
+            ( cd "$STAGE" && zip -qr "$GITHUB_WORKSPACE/dist/${name}.zip" "$name" )
+          done
+
+          ls -la "$GITHUB_WORKSPACE/dist"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # macOS. Runs on a mac so codesign, notarytool and hdiutil are available.
+  # The client ships as a signed, notarized, stapled DMG; the server ships as
+  # a signed, notarized, stapled .app inside a zip — a disk image would only
+  # get in the way of a headless deploy.
+  # -------------------------------------------------------------------------
+  build-macos:
+    name: Export macOS
+    runs-on: macos-latest
+
+    env:
+      # Lifted into env so `if:` expressions can test for their presence.
+      MACOS_CERT_P12_BASE64:  ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PASSWORD:    ${{ secrets.MACOS_CERT_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      AC_APPLE_ID:            ${{ secrets.AC_APPLE_ID }}
+      AC_APP_PASSWORD:        ${{ secrets.AC_APP_PASSWORD }}
+      AC_TEAM_ID:             ${{ secrets.AC_TEAM_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Strip the namespace so artifact names carry only the version.
+          VERSION="${TAG#game/}"
+          if [ "$VERSION" = "$TAG" ] || [ -z "$VERSION" ]; then
+            echo "expected a game/<version> tag, got '${TAG}'" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "semver=${VERSION#v}" >> "$GITHUB_OUTPUT"
+          echo "resolved ${TAG} -> ${VERSION}"
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} and export templates
+        run: |
+          set -euo pipefail
+          TAG="${GODOT_VERSION}-${GODOT_RELEASE}"
+          BASE="https://github.com/godotengine/godot/releases/download/${TAG}"
+
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" \
+            "${BASE}/Godot_v${TAG}_macos.universal.zip"
+          curl -fsSL -o "$RUNNER_TEMP/templates.tpz" \
+            "${BASE}/Godot_v${TAG}_export_templates.tpz"
+
+          # ditto rather than unzip so the editor bundle keeps its permissions.
+          /usr/bin/ditto -x -k "$RUNNER_TEMP/godot.zip" "$RUNNER_TEMP/godot"
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -sf "$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" \
+            "$RUNNER_TEMP/bin/godot"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+
+          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          mkdir -p "$TEMPLATE_DIR"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/tpz"
+          mv "$RUNNER_TEMP/tpz/templates"/* "$TEMPLATE_DIR/"
+
+          godot --version
+
+      - name: Stamp bundle version from tag
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+        run: |
+          set -euo pipefail
+          # CFBundleVersion / CFBundleShortVersionString must be dotted numbers,
+          # so a tag like v0.1.0-rc1 keeps the committed placeholder instead of
+          # failing the export.
+          if printf '%s' "$SEMVER" | grep -Eq '^[0-9]+(\.[0-9]+){0,3}$'; then
+            sed -i '' \
+              -e "s|^application/short_version=.*|application/short_version=\"${SEMVER}\"|" \
+              -e "s|^application/version=.*|application/version=\"${SEMVER}\"|" \
+              game/export_presets.cfg
+            echo "stamped ${SEMVER}"
+          else
+            echo "tag '${SEMVER}' is not a dotted version, leaving presets alone"
+          fi
+          grep -n 'application/\(short_\)\?version' game/export_presets.cfg
+
+      - name: Import project
+        run: |
+          set -euo pipefail
+          godot --headless --path game --import || true
+
+      - name: Export app bundles
+        id: export
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/zips" "$RUNNER_TEMP/apps/client" "$RUNNER_TEMP/apps/server"
+
+          godot --headless --path game --export-release "macOS Client" \
+            "$RUNNER_TEMP/zips/client.zip"
+          godot --headless --path game --export-release "macOS Server" \
+            "$RUNNER_TEMP/zips/server.zip"
+
+          # Godot names the bundle after the project, not the export path, so
+          # both archives hold an "Ion Strikers.app". Unpack them into separate
+          # directories and locate each bundle rather than assuming a name.
+          /usr/bin/ditto -x -k "$RUNNER_TEMP/zips/client.zip" "$RUNNER_TEMP/apps/client"
+          /usr/bin/ditto -x -k "$RUNNER_TEMP/zips/server.zip" "$RUNNER_TEMP/apps/server"
+
+          CLIENT_APP="$(find "$RUNNER_TEMP/apps/client" -maxdepth 1 -name '*.app' -print -quit)"
+          SERVER_APP="$(find "$RUNNER_TEMP/apps/server" -maxdepth 1 -name '*.app' -print -quit)"
+          [ -n "$CLIENT_APP" ] || { echo "client .app not found in export"; exit 1; }
+          [ -n "$SERVER_APP" ] || { echo "server .app not found in export"; exit 1; }
+
+          # Renaming the directory is cosmetic — CFBundleExecutable and the
+          # bundle identifier live in Info.plist — but it keeps the server
+          # archive self-explanatory. Do it before signing.
+          RENAMED="$(dirname "$SERVER_APP")/Ion Strikers Server.app"
+          if [ "$SERVER_APP" != "$RENAMED" ]; then
+            mv "$SERVER_APP" "$RENAMED"
+            SERVER_APP="$RENAMED"
+          fi
+
+          echo "client_app=$CLIENT_APP" >> "$GITHUB_OUTPUT"
+          echo "server_app=$SERVER_APP" >> "$GITHUB_OUTPUT"
+          echo "client: $CLIENT_APP"
+          echo "server: $SERVER_APP"
+
+      # --- Signing -------------------------------------------------------
+      - name: Import Developer ID certificate into temp keychain
+        if: env.MACOS_CERT_P12_BASE64 != ''
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          # Ephemeral: this keychain is deleted at the end of the job, so the
+          # password protects nothing long-lived.
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          # printf '%s' rather than echo so a trailing newline in the secret
+          # cannot end up in the decoded bytes.
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          # A valid PKCS#12 is DER, so it always starts 30 82.
+          echo "First 4 bytes (expect 3082):"
+          xxd -l 4 "$CERT_PATH" | head -1
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # -f pkcs12 is an explicit format hint; without it `security` guesses
+          # and can fail with an opaque "invalid parameters" on some images.
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_CERT_PASSWORD" \
+            -f pkcs12 \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+          echo "Signing identities visible:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          rm -f "$CERT_PATH"
+
+      - name: Codesign app bundles (hardened runtime)
+        if: env.MACOS_CERT_P12_BASE64 != ''
+        run: |
+          set -euo pipefail
+          for app in "${{ steps.export.outputs.client_app }}" \
+                     "${{ steps.export.outputs.server_app }}"; do
+            /usr/bin/codesign \
+              --force \
+              --timestamp \
+              --options runtime \
+              --entitlements tools/release/macos-entitlements.plist \
+              --sign "$MACOS_SIGNING_IDENTITY" \
+              "$app"
+            /usr/bin/codesign --verify --strict --deep --verbose=2 "$app"
+          done
+
+      - name: Notarize and staple app bundles
+        if: env.MACOS_CERT_P12_BASE64 != '' && env.AC_APPLE_ID != '' && env.AC_APP_PASSWORD != '' && env.AC_TEAM_ID != ''
+        run: |
+          set -euo pipefail
+          i=0
+          for app in "${{ steps.export.outputs.client_app }}" \
+                     "${{ steps.export.outputs.server_app }}"; do
+            i=$((i + 1))
+            ZIP="$RUNNER_TEMP/notarize-$i.zip"
+            /usr/bin/ditto -c -k --keepParent "$app" "$ZIP"
+
+            xcrun notarytool submit "$ZIP" \
+              --apple-id "$AC_APPLE_ID" \
+              --password "$AC_APP_PASSWORD" \
+              --team-id  "$AC_TEAM_ID" \
+              --wait \
+              --timeout 30m
+
+            # Stapling writes the ticket into the bundle, so it survives being
+            # archived and shipped.
+            xcrun stapler staple "$app"
+            rm -f "$ZIP"
+          done
+
+      # --- Package -------------------------------------------------------
+      - name: Build DMG for the client
+        id: dmg
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          DMG_ROOT="$RUNNER_TEMP/dmgroot"
+          DMG="dist/ion-strikers-${VERSION}-macos-universal.dmg"
+
+          mkdir -p "$DMG_ROOT"
+          /usr/bin/ditto "${{ steps.export.outputs.client_app }}" \
+            "$DMG_ROOT/$(basename "${{ steps.export.outputs.client_app }}")"
+          ln -s /Applications "$DMG_ROOT/Applications"
+
+          hdiutil create \
+            -volname "Ion Strikers" \
+            -srcfolder "$DMG_ROOT" \
+            -fs HFS+ \
+            -format UDZO \
+            -ov -quiet \
+            "$DMG"
+
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Sign, notarize and staple the DMG
+        if: env.MACOS_CERT_P12_BASE64 != ''
+        run: |
+          set -euo pipefail
+          DMG="${{ steps.dmg.outputs.dmg }}"
+
+          /usr/bin/codesign --force --timestamp \
+            --sign "$MACOS_SIGNING_IDENTITY" "$DMG"
+
+          if [ -n "$AC_APPLE_ID" ] && [ -n "$AC_APP_PASSWORD" ] && [ -n "$AC_TEAM_ID" ]; then
+            xcrun notarytool submit "$DMG" \
+              --apple-id "$AC_APPLE_ID" \
+              --password "$AC_APP_PASSWORD" \
+              --team-id  "$AC_TEAM_ID" \
+              --wait \
+              --timeout 30m
+            xcrun stapler staple "$DMG"
+            spctl --assess --type open --context context:primary-signature -vv "$DMG" || true
+          fi
+
+      - name: Package the server
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          NAME="ion-strikers-server-${VERSION}-macos-universal"
+          STAGE="$RUNNER_TEMP/server-stage/$NAME"
+
+          mkdir -p "$STAGE"
+          /usr/bin/ditto "${{ steps.export.outputs.server_app }}" \
+            "$STAGE/$(basename "${{ steps.export.outputs.server_app }}")"
+          install -m 0755 tools/release/run-server.sh "$STAGE/"
+
+          # ditto keeps the bundle's symlinks, permissions and stapled ticket
+          # intact, which plain `zip` does not guarantee.
+          /usr/bin/ditto -c -k --keepParent "$STAGE" "dist/${NAME}.zip"
+          ls -la dist
+
+      - name: Delete temp keychain
+        if: always() && env.MACOS_CERT_P12_BASE64 != ''
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Publish the release with every artifact plus checksums.
+  # -------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: [build-desktop, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          ls -la
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # The release attaches to the real tag; only its title drops the prefix.
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#game/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Game ${{ steps.tag.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.dmg
+            dist/checksums.txt

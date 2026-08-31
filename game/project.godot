@@ -12,6 +12,9 @@ config_version=5
 
 config/name="Ion Strikers"
 run/main_scene="res://scenes/boot/boot.tscn"
+; Release templates leave stdout block-buffered, which hides dedicated-server
+; logs from journald/docker until the process exits. Debug builds already do this.
+run/flush_stdout_on_print=true
 config/features=PackedStringArray("4.7")
 config/icon="res://icon.svg"
 
@@ -49,3 +52,4 @@ ui_cancel={
 
 anti_aliasing/quality/msaa_3d=2
 environment/defaults/default_clear_color=Color(0.043, 0.039, 0.086, 1)
+textures/vram_compression/import_etc2_astc=true
