@@ -63,6 +63,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if g.LifecycleState == "over" {
 			continue
 		}
+		// The Game Server process is not a lobby. A heartbeat row with no map
+		// is the host itself (or a placeholder) and must not appear in browse.
+		if g.MapID == "" {
+			continue
+		}
 		entries = append(entries, toEntry(g))
 	}
 	sort.Slice(entries, func(i, j int) bool {

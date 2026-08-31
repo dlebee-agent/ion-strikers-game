@@ -1210,6 +1210,9 @@ func _filtered_games() -> Array:
 		if typeof(game) != TYPE_DICTIONARY:
 			continue
 		var g: Dictionary = game
+		# Host process rows land here with an empty map; they are not lobbies.
+		if str(g.get("map", "")).strip_edges().is_empty():
+			continue
 		if not q.is_empty():
 			var hay := ("%s %s %s" % [
 				str(g.get("name", "")),

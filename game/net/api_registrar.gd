@@ -143,6 +143,8 @@ func _do_heartbeat() -> void:
 
 	for gid: String in _registry.instances:
 		var inst: GameInstance = _registry.instances[gid]
+		if inst.map_id.is_empty():
+			continue
 		var humans := 0
 		var spectators := 0
 		for p: Participant in inst.participants.values():

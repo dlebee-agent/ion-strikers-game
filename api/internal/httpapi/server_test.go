@@ -201,13 +201,13 @@ func TestListIncludesEveryRegisteredServer(t *testing.T) {
 	managed := newFakeGameServer(t, true)
 	register(t, ts, managed, "srv-managed", true)
 	heartbeat(t, ts, "srv-managed", 5, 1, []store.CachedGame{
-		{GameID: "g1", ServerID: "srv-managed", DisplayName: "Arena", Players: 5},
+		{GameID: "g1", ServerID: "srv-managed", DisplayName: "Arena", MapID: "parkour", Players: 5},
 	}).Body.Close()
 
 	private := newFakeGameServer(t, false)
 	register(t, ts, private, "srv-private", false)
 	heartbeat(t, ts, "srv-private", 3, 1, []store.CachedGame{
-		{GameID: "d1", ServerID: "srv-private", DisplayName: "Private", Players: 3},
+		{GameID: "d1", ServerID: "srv-private", DisplayName: "Private", MapID: "parkour", Players: 3},
 	}).Body.Close()
 
 	resp, err := http.Get(ts.URL + "/v1/games")
@@ -226,6 +226,36 @@ func TestListIncludesEveryRegisteredServer(t *testing.T) {
 	}
 	if len(result.Games) != 2 {
 		t.Fatalf("both managed and private lobbies should be discoverable, got %d", len(result.Games))
+	}
+}
+
+func TestListOmitsHostRowsWithNoMap(t *testing.T) {
+	ts := setup(t)
+
+	managed := newFakeGameServer(t, true)
+	register(t, ts, managed, "srv-managed", true)
+	heartbeat(t, ts, "srv-managed", 0, 1, []store.CachedGame{
+		{GameID: "host-placeholder", ServerID: "srv-managed", MaxPlayers: 8, Capacity: 8, Round: 1},
+		{GameID: "real-lobby", ServerID: "srv-managed", DisplayName: "Arena", MapID: "parkour", Mode: "classic"},
+	}).Body.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/games")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Games []struct {
+			GameID string `json:"game_id"`
+			Map    string `json:"map"`
+		} `json:"games"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Games) != 1 || result.Games[0].GameID != "real-lobby" {
+		t.Fatalf("expected only the mapped lobby, got %+v", result.Games)
 	}
 }
 
