@@ -10,6 +10,7 @@ const SpectatorCam = preload("res://core/spectator_cam.gd")
 const AnimDriver = preload("res://core/anim_driver.gd")
 const MeteorFx = preload("res://core/meteor_fx.gd")
 const CameraShake = preload("res://core/camera_shake.gd")
+const RagdollScript = preload("res://core/ragdoll.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -39,6 +40,11 @@ var _player_names: Dictionary = {}  # id → name
 
 var _meteor_warn_until: float = 0.0
 var _shake := CameraShake.new()
+
+# Stash the death cause from HIT so the ragdoll (triggered on the next snapshot
+# for remotes, or immediately for the local player) knows how to kick.
+var _last_death: Dictionary = {}  # target_id -> { by, head, cause }
+var _local_ragdoll: Ragdoll
 
 ## Cosmetic clock for the score bar. The server has no round time limit, so this
 ## counts up from the last round start (match start in deathmatch).
@@ -275,6 +281,9 @@ func _on_team_denied(msg: Dictionary) -> void:
 func _enter_stands() -> void:
 	_in_stands = true
 	_alive = false
+	if _local_ragdoll:
+		_local_ragdoll.end()
+		_local_ragdoll = null
 	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
 
 	if pawn:
@@ -286,6 +295,9 @@ func _enter_stands() -> void:
 
 
 func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
+	if _local_ragdoll:
+		_local_ragdoll.end()
+		_local_ragdoll = null
 	if pawn:
 		pawn.queue_free()
 
@@ -335,6 +347,15 @@ func _physics_process(dt: float) -> void:
 	for pid: int in _remotes:
 		var rp: RemotePawn = _remotes[pid]
 		rp.interpolate(_snap_time)
+		rp.tick_ragdoll(dt, _colliders)
+
+	if _local_ragdoll:
+		_local_ragdoll.update(dt, _colliders)
+		if _local_ragdoll.dead:
+			if pawn:
+				pawn.set_mannequin_visible(false)
+			_local_ragdoll.end()
+			_local_ragdoll = null
 
 	if not _match_over and not blocked and _spectator:
 		if _in_stands:
@@ -588,7 +609,13 @@ func _on_snap(snap: Dictionary) -> void:
 			var p_team := int(p.get("team", 0))
 			if p_team != rp.team:
 				rp.set_team_value(p_team)
+			var was_alive := rp.alive
 			rp.push_snapshot(p, _snap_time)
+			# The alive flag only updates during interpolate(), but the
+			# ragdoll must be seeded the moment the death snapshot arrives
+			# so the body is still in the pose it died in.
+			if was_alive and not p_alive and not rp.ragdoll:
+				_start_remote_ragdoll(rp, pid)
 		else:
 			var p_team := int(p.get("team", 0))
 			if p_team == Protocol.TEAM_NONE:
@@ -629,6 +656,7 @@ func _on_hit(msg: Dictionary) -> void:
 			by_name, target_name, cause, head,
 			int(msg.get("by_team", 0)), int(msg.get("target_team", 0)),
 			by_id == my_id or target_id == my_id)
+		_last_death[target_id] = { "by": by_id, "head": head, "cause": cause }
 	if target_id == my_id:
 		_hud.update_hp(int(msg.get("hp", 0)))
 		if killed:
@@ -641,12 +669,25 @@ func _on_hit(msg: Dictionary) -> void:
 				pawn.weapon.special_armed = false
 				pawn.set_fp_arms_visible(false)
 				pawn.set_mannequin_visible(true)
-				if pawn.anim_driver:
-					pawn.anim_driver.set_state(AnimDriver.State.DEATH)
+
+				var kick_dir := _death_kick_dir(by_id, pawn.movement.position,
+					pawn.movement.yaw)
+				var kick_cause := _death_cause_str(cause, head)
+				var kick_vel := pawn.movement.velocity
+				_local_ragdoll = _try_local_ragdoll(kick_dir, kick_cause, kick_vel)
+				if not _local_ragdoll:
+					if pawn.anim_driver:
+						pawn.anim_driver.set_state(AnimDriver.State.DEATH)
+
 				var body_pos := pawn.movement.position
 				var eye_pos := pawn.movement.get_eye_position()
 				if _spectator:
-					_spectator.start_death(body_pos, eye_pos)
+					if _local_ragdoll:
+						pawn.set_mannequin_visible(false)
+						_spectator._death_mannequin = pawn.get_mannequin()
+					_spectator.start_death_ragdoll(body_pos, eye_pos,
+						_local_ragdoll, _colliders,
+						_killer_world_pos(by_id))
 			_sync_special_hud()
 			if Announcer:
 				Announcer.player_died()
@@ -949,6 +990,9 @@ func _enter_match_over(winner: int) -> void:
 		return
 	_match_over = true
 	_alive = false
+	if _local_ragdoll:
+		_local_ragdoll.end()
+		_local_ragdoll = null
 	if _spectator:
 		_spectator.stop()
 	if _hud:
@@ -1002,6 +1046,76 @@ func _update_spectator_panel() -> void:
 	_hud.show_spectator_panel(
 		str(info["who"]), str(info["sub"]), Color(info["color"]))
 	_hud.set_spectate_crosshair(_spectator.is_fpv_active())
+
+
+# ── Ragdoll helpers ──────────────────────────────────────────────────────
+
+func _death_cause_str(cause: int, head_shot: bool) -> String:
+	if cause == Protocol.CAUSE_METEOR:
+		return "meteor"
+	if cause == Protocol.CAUSE_SPECIAL:
+		return "special"
+	if cause == Protocol.CAUSE_MELEE:
+		return "melee"
+	if head_shot:
+		return "head"
+	return "laser"
+
+
+func _death_kick_dir(killer_id: int, victim_pos: Vector3, victim_yaw: float) -> Vector3:
+	var src: Variant = _killer_world_pos(killer_id)
+	if src != null:
+		var dx := victim_pos.x - (src as Vector3).x
+		var dz := victim_pos.z - (src as Vector3).z
+		var l := sqrt(dx * dx + dz * dz)
+		if l > 0.01:
+			return Vector3(dx / l, 0.0, dz / l)
+	return Vector3(-sin(deg_to_rad(victim_yaw)), 0.0, -cos(deg_to_rad(victim_yaw)))
+
+
+func _killer_world_pos(killer_id: int) -> Variant:
+	if killer_id == 0:
+		return null
+	var my_id := client.my_id if client else 0
+	if killer_id == my_id and pawn:
+		return pawn.movement.position
+	if _remotes.has(killer_id):
+		var rp: RemotePawn = _remotes[killer_id]
+		return Vector3(rp._last_eye_x, rp._last_eye_y, rp._last_eye_z)
+	return null
+
+
+func _try_local_ragdoll(dir: Vector3, cause: String, vel: Vector3) -> Ragdoll:
+	if not pawn:
+		return null
+	var skel := pawn._tp_skeleton
+	if not skel:
+		return null
+	var anim_pl: AnimationPlayer = null
+	if pawn.anim_driver and pawn.anim_driver._anim_player:
+		anim_pl = pawn.anim_driver._anim_player
+	var rag := RagdollScript.try_build(skel, anim_pl)
+	if not rag:
+		return null
+	rag.kick(dir, cause, vel)
+	return rag
+
+
+func _start_remote_ragdoll(rp: RemotePawn, pid: int) -> void:
+	var info: Dictionary = _last_death.get(pid, {})
+	_last_death.erase(pid)
+
+	var victim_pos := Vector3(rp._last_eye_x, rp._last_eye_y, rp._last_eye_z)
+	var victim_yaw := rp._last_eye_yaw
+
+	var cause_int: int = int(info.get("cause", Protocol.CAUSE_LASER))
+	var head_shot: bool = bool(info.get("head", false))
+	var killer_id: int = int(info.get("by", 0))
+
+	var kick_dir := _death_kick_dir(killer_id, victim_pos, victim_yaw)
+	var kick_cause := _death_cause_str(cause_int, head_shot)
+	var kick_vel := rp.get_last_velocity()
+	rp.start_ragdoll(kick_dir, kick_cause, kick_vel)
 
 
 func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:

@@ -17,6 +17,11 @@ const SPEC_FLY_MAX := 1.2
 
 const DEATH_PULLBACK := 2.6
 const DEATH_SETTLE_SPEED := 0.7
+const DEATH_RIGIDITY := 0.4
+const DEATH_REVEAL := 0.8
+const DEATH_KILLER_BIAS := 0.55
+const DEATH_SKIM := 0.3
+const DEATH_LOOK_INTERVAL := 0.25
 
 const ORBIT_RADIUS := 26.0
 const ORBIT_HEIGHT := 22.0
@@ -46,6 +51,14 @@ var _death_settle_t := 0.0
 var _death_body_pos := Vector3.ZERO
 var _death_start_pos := Vector3.ZERO
 var _death_can_leave := false
+
+var _death_ragdoll: Ragdoll
+var _death_colliders: Array[AABB] = []
+var _death_killer_pos: Variant = null  # Vector3 or null
+var _death_look := Vector3.ZERO
+var _death_look_t := 0.0
+var _death_shown := false
+var _death_mannequin: Node3D  # set externally when ragdoll hides body
 
 var _remotes: Dictionary = {}
 var _my_team: int = 0
@@ -100,6 +113,31 @@ func start_death(body_pos: Vector3, eye_pos: Vector3) -> void:
 	activate()
 
 
+func start_death_ragdoll(body_pos: Vector3, eye_pos: Vector3,
+		rag: Ragdoll, colliders: Array[AABB], killer_pos: Variant) -> void:
+	follow_state = FollowState.DEATH_SETTLE
+	_death_settle_t = 0.0
+	_death_body_pos = body_pos
+	_death_start_pos = eye_pos
+	_death_can_leave = false
+	_death_ragdoll = rag
+	_death_colliders = colliders
+	_death_killer_pos = killer_pos
+	_death_look = Vector3.ZERO
+	_death_look_t = 0.0
+	_death_shown = false
+	_pos = eye_pos
+	_fly_active = false
+	_target_id = 0
+	_last_target_id = 0
+	_clear_hidden()
+	var dir := (body_pos - eye_pos)
+	if dir.length_squared() > 0.001:
+		_yaw = rad_to_deg(atan2(-dir.x, -dir.z))
+		_pitch = rad_to_deg(asin(clampf(dir.y / dir.length(), -1.0, 1.0)))
+	activate()
+
+
 func start_teammate_follow() -> void:
 	follow_state = FollowState.TEAMMATE
 	_fly_active = false
@@ -113,6 +151,9 @@ func stop() -> void:
 	follow_state = FollowState.NONE
 	_fly_active = false
 	_death_can_leave = false
+	_death_ragdoll = null
+	_death_shown = false
+	_death_mannequin = null
 	_clear_hidden()
 	deactivate()
 
@@ -167,6 +208,11 @@ func leave_death_for_teammate(dir: int, remotes: Dictionary, my_team: int) -> bo
 		var mates := _get_living(remotes, my_team)
 		if mates.is_empty():
 			return false
+		# Ensure the corpse is visible when we leave to spectate a teammate.
+		if _death_mannequin and is_instance_valid(_death_mannequin):
+			_death_mannequin.visible = true
+		_death_ragdoll = null
+		_death_mannequin = null
 		follow_state = FollowState.TEAMMATE
 		_target_id = 0
 		_last_target_id = 0
@@ -328,6 +374,11 @@ func _update_watch_fpv(dt: float, remotes: Dictionary) -> void:
 # ── Death settle ─────────────────────────────────────────────────────────
 
 func _update_death_settle(dt: float, remotes: Dictionary, my_team: int) -> void:
+	if _death_ragdoll:
+		_update_death_ragdoll_cam(dt, remotes, my_team)
+		return
+
+	# Fallback: Death01 clip, simple pull-back.
 	_death_settle_t = minf(1.0, _death_settle_t + dt * DEATH_SETTLE_SPEED)
 
 	var back_dir := (_death_start_pos - _death_body_pos).normalized()
@@ -346,6 +397,132 @@ func _update_death_settle(dt: float, remotes: Dictionary, my_team: int) -> void:
 	var mates := _get_living(remotes, my_team)
 	var can_leave := _death_settle_t > 0.95 and not mates.is_empty()
 	_death_can_leave = can_leave
+
+
+func _update_death_ragdoll_cam(dt: float, remotes: Dictionary, my_team: int) -> void:
+	var hp := _death_ragdoll.head_pos
+
+	# Settle phase starts once the ragdoll stops moving.
+	if _death_ragdoll.settled:
+		_death_settle_t = minf(1.0, _death_settle_t + dt * DEATH_SETTLE_SPEED)
+
+	# Update killer position if they are still on the field.
+	if _death_killer_pos != null:
+		var kid := 0
+		for pid: int in remotes:
+			var rp = remotes[pid]
+			if is_instance_valid(rp) and rp.alive:
+				var rp_pos := Vector3(rp._last_eye_x, rp._last_eye_y, rp._last_eye_z)
+				if rp_pos.distance_squared_to(_death_killer_pos as Vector3) < 1.0:
+					_death_killer_pos = rp_pos
+
+	# Pick the look direction a few times a second — every frame twitches.
+	_death_look_t += dt
+	if _death_look == Vector3.ZERO or _death_look_t > DEATH_LOOK_INTERVAL:
+		_death_look = _pick_death_look(hp, _death_killer_pos)
+		_death_look_t = 0.0
+
+	# Position: ride the Head while it tumbles; after settle, pull back along
+	# the opposite of the look direction, skimmed off geometry.
+	var want_back := DEATH_PULLBACK * _death_settle_t
+	var target_pos := hp
+	if want_back > 0.001:
+		var bx := -_death_look.x
+		var bz := -_death_look.z
+		var by := 0.55
+		var bl := sqrt(bx * bx + by * by + bz * bz)
+		if bl > 0.001:
+			var nb := Vector3(bx / bl, by / bl, bz / bl)
+			var clearance := _ray_clearance(hp, nb, want_back)
+			target_pos = hp + nb * clearance
+
+	var cur := _camera.global_position
+	var k := minf(1.0, dt * 26.0)
+	_pos = cur.lerp(target_pos, k)
+	_camera.global_position = _pos
+
+	# Orientation: chase the head with killer bias, lean toward the body once settled.
+	var look_target := hp + Vector3(_death_look.x, 0.12, _death_look.z)
+	var aim_quat := Quaternion.IDENTITY
+	var aim_dir := (look_target - _camera.global_position)
+	if aim_dir.length_squared() > 0.001:
+		_camera.look_at(look_target, Vector3.UP)
+		aim_quat = _camera.quaternion
+
+	if _death_settle_t > 0.001:
+		var corpse_dir := (hp - _camera.global_position)
+		if corpse_dir.length_squared() > 0.001:
+			_camera.look_at(hp, Vector3.UP)
+			var corpse_quat := _camera.quaternion
+			aim_quat = aim_quat.slerp(corpse_quat, _death_settle_t)
+
+	var rk := minf(1.0, dt * (4.0 + 26.0 * DEATH_RIGIDITY))
+	_camera.quaternion = _camera.quaternion.slerp(aim_quat, rk)
+
+	# Reveal the body once the camera has pulled away far enough.
+	var cam_dist := _camera.global_position.distance_to(hp)
+	var should_show := cam_dist > DEATH_REVEAL
+	if should_show != _death_shown:
+		_death_shown = should_show
+		if _death_mannequin and is_instance_valid(_death_mannequin):
+			_death_mannequin.visible = should_show
+
+	var mates := _get_living(remotes, my_team)
+	var can_leave := _death_settle_t > 0.999 and not mates.is_empty()
+	_death_can_leave = can_leave
+
+
+func _pick_death_look(hp: Vector3, killer_pos: Variant) -> Vector3:
+	var base_yaw: float = 0.0
+	var has_killer := killer_pos != null
+	if has_killer:
+		var kp: Vector3 = killer_pos as Vector3
+		base_yaw = atan2(kp.x - hp.x, kp.z - hp.z)
+
+	var best := Vector3(0.0, 0.0, 1.0)
+	var best_score := -INF
+	for i in 12:
+		var yaw := base_yaw + float(i) / 12.0 * TAU
+		var dx := sin(yaw)
+		var dz := cos(yaw)
+		var d := _ray_clearance(hp, Vector3(dx, 0.0, dz), 8.0)
+		var clear := minf(d, 4.0)
+		var toward := cos(yaw - base_yaw) if has_killer else 0.0
+		var score := clear * 0.7 + toward * 3.2
+		if score > best_score:
+			best_score = score
+			best = Vector3(dx, 0.0, dz)
+	return best
+
+
+func _ray_clearance(origin: Vector3, dir: Vector3, want: float) -> float:
+	var best := want
+	for box: AABB in _death_colliders:
+		var t := _ray_aabb_local(origin, dir, box)
+		if t > 0.0 and t < best + DEATH_SKIM:
+			best = minf(best, maxf(0.0, t - DEATH_SKIM))
+	return best
+
+
+func _ray_aabb_local(origin: Vector3, dir: Vector3, box: AABB) -> float:
+	var tmin := -1e20
+	var tmax := 1e20
+	for i in 3:
+		if absf(dir[i]) < 1e-8:
+			if origin[i] < box.position[i] or origin[i] > box.end[i]:
+				return INF
+		else:
+			var t1 := (box.position[i] - origin[i]) / dir[i]
+			var t2 := (box.end[i] - origin[i]) / dir[i]
+			if t1 > t2:
+				var tmp := t1
+				t1 = t2
+				t2 = tmp
+			tmin = maxf(tmin, t1)
+			tmax = minf(tmax, t2)
+			if tmin > tmax:
+				return INF
+	return tmin if tmin > 0.0 else INF
 
 
 # ── Teammate follow ─────────────────────────────────────────────────────

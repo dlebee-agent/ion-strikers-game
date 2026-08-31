@@ -5,6 +5,7 @@ const AnimDriver = preload("res://core/anim_driver.gd")
 const TeamTint = preload("res://core/team_tint.gd")
 const Movement = preload("res://core/movement.gd")
 const ChargeOrb = preload("res://core/charge_orb.gd")
+const RagdollScript = preload("res://core/ragdoll.gd")
 
 const INTERP_DELAY_MS := 80.0
 const MAX_SAMPLES := 10
@@ -39,6 +40,8 @@ var _last_eye_pitch: float = 0.0
 var _last_eye_crouched: bool = false
 
 var _charge_orb: ChargeOrb
+var ragdoll: Ragdoll
+var _ragdoll_frozen := false
 
 
 func setup(p_id: int, p_name: String, p_team: int) -> void:
@@ -216,6 +219,32 @@ func _apply_pose(pose: Dictionary) -> void:
 	var pos := Vector3(pose["x"], pose["y"], pose["z"])
 	var yaw_val: float = pose["yaw"]
 
+	var now_alive := bool(pose.get("alive", true))
+	if not now_alive and alive:
+		# Latch the death position before any subsequent snapshot can move it.
+		_last_eye_x = pos.x
+		_last_eye_y = pos.y
+		_last_eye_z = pos.z
+		_last_eye_yaw = yaw_val
+		_last_eye_pitch = float(pose.get("pitch", 0.0))
+		_last_eye_crouched = bool(pose.get("crouched", false))
+		if _mannequin:
+			_mannequin.global_position = pos
+			_mannequin.rotation_degrees.y = yaw_val + BODY_YAW_OFFSET
+		_clear_charge_orb()
+		_ragdoll_frozen = true
+	elif now_alive and not alive:
+		end_ragdoll()
+		if _anim_driver:
+			_anim_driver.reset_locomotion()
+		_ragdoll_frozen = false
+	alive = now_alive
+	visible = true
+
+	# Corpse stays at the death transform; the solver writes bone positions directly.
+	if _ragdoll_frozen:
+		return
+
 	_last_eye_x = pos.x
 	_last_eye_y = pos.y
 	_last_eye_z = pos.z
@@ -227,19 +256,6 @@ func _apply_pose(pose: Dictionary) -> void:
 		_mannequin.global_position = pos
 		_mannequin.rotation_degrees.y = yaw_val + BODY_YAW_OFFSET
 
-	var now_alive := bool(pose.get("alive", true))
-	if not now_alive and alive:
-		if _anim_driver:
-			_anim_driver.set_state(AnimDriver.State.DEATH)
-		_clear_charge_orb()
-	elif now_alive and not alive:
-		if _anim_driver:
-			_anim_driver.reset_locomotion()
-	alive = now_alive
-	# Corpses stay on the floor in the death clip; they are freed when the
-	# player leaves the snapshot, not the moment they die.
-	visible = true
-
 	if _movement and _anim_driver and alive:
 		_movement.position = pos
 		_movement.yaw = yaw_val
@@ -249,8 +265,6 @@ func _apply_pose(pose: Dictionary) -> void:
 			float(pose.get("vx", 0.0)),
 			float(pose.get("vy", 0.0)),
 			float(pose.get("vz", 0.0)))
-		# A hop is a rising edge after being near-settled, so the jump clip
-		# retriggers on bunny-hops instead of holding the previous air pose.
 		var vy := _movement.velocity.y
 		if vy > 1.2:
 			_movement.on_ground = false
@@ -288,6 +302,45 @@ func _clear_charge_orb() -> void:
 	_charge_orb = null
 
 
+func start_ragdoll(dir: Vector3, cause: String, vel: Vector3) -> bool:
+	var anim_pl := _find_animation_player(_mannequin) if _mannequin else null
+	var rag := RagdollScript.try_build(_skeleton, anim_pl)
+	if not rag:
+		if _anim_driver:
+			_anim_driver.set_state(AnimDriver.State.DEATH)
+		return false
+	ragdoll = rag
+	rag.kick(dir, cause, vel)
+	return true
+
+
+func end_ragdoll() -> void:
+	if ragdoll:
+		ragdoll.end()
+		ragdoll = null
+
+
+func tick_ragdoll(dt: float, colliders: Array[AABB]) -> void:
+	if ragdoll:
+		ragdoll.update(dt, colliders)
+		if ragdoll.dead:
+			set_body_visible(false)
+			end_ragdoll()
+
+
+func get_last_velocity() -> Vector3:
+	if _samples.size() >= 2:
+		var a: Dictionary = _samples[_samples.size() - 2]
+		var b: Dictionary = _samples[_samples.size() - 1]
+		var span: float = b["t"] - a["t"]
+		if span > 0.001:
+			return Vector3(
+				(b["x"] - a["x"]) / span,
+				(b["y"] - a["y"]) / span,
+				(b["z"] - a["z"]) / span)
+	return Vector3.ZERO
+
+
 func set_team_value(t: int) -> void:
 	team = t
 	_apply_tint()
@@ -298,6 +351,16 @@ func _find_skeleton(node: Node) -> Skeleton3D:
 		return node as Skeleton3D
 	for child in node.get_children():
 		var found := _find_skeleton(child)
+		if found:
+			return found
+	return null
+
+
+func _find_animation_player(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node as AnimationPlayer
+	for child in node.get_children():
+		var found := _find_animation_player(child)
 		if found:
 			return found
 	return null
