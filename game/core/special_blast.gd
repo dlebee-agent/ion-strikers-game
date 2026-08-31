@@ -23,7 +23,7 @@ const SHELL_OPACITY := 0.3
 const SPARK_OPACITY := 0.85
 const SPARK_WIDTH := 0.11
 
-var _radius := 4.5
+var _radius := 8.0
 var _t := 0.0
 
 var _flash: MeshInstance3D

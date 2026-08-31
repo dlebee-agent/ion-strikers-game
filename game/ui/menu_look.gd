@@ -66,6 +66,17 @@ static func box(bg: Color, border: Color, radius := 4, border_w := 1) -> StyleBo
 	return s
 
 
+## Labels have no letter-spacing property, so wide-tracked small caps are faked
+## by interleaving spaces between glyphs.
+static func tracked(text: String) -> String:
+	var out := ""
+	for i in text.length():
+		if i > 0:
+			out += " "
+		out += text[i]
+	return out
+
+
 static func kicker(text: String, color: Color = MUTE_2, size := 10) -> Label:
 	var l := Label.new()
 	l.text = text.to_upper()

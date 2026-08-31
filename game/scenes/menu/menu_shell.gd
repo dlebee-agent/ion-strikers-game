@@ -3,6 +3,7 @@ extends Control
 const MAPS: Array[Dictionary] = [
 	{"id": "parkour", "name": "Parkour Yard", "desc": "Mirrored stairs & jump blocks. Movement + jump test bed."},
 ]
+const MenuStage = preload("res://scenes/menu/menu_stage.gd")
 
 var callsign_screen: Control
 var home_screen: Control
@@ -11,6 +12,8 @@ var create_screen: Control
 var settings_screen: Control
 var menu_chrome: Control
 var stage_glows: Control
+var stage_host: SubViewportContainer
+var _menu_stage
 var live_blip: ColorRect
 var live_blip_chrome: ColorRect
 var callsign_input: LineEdit
@@ -27,6 +30,7 @@ var rounds_row: HBoxContainer
 var kills_row: HBoxContainer
 var bots_dev_wrap: Control
 var brief_shoot_row: Control
+var brief_move_row: Control
 var brief_host: Label
 var sum_network: Label
 var sum_mode: Label
@@ -35,11 +39,13 @@ var sum_cap: Label
 var sum_spec: Label
 var brief_bots: Label
 var brief_bots_shoot: Label
+var brief_bots_move: Label
 var sum_total: Label
 var server_in: LineEdit
 var launch_note: Label
 var invert_y_check: Button
 var binds_container: VBoxContainer
+var _foot_binds: Label
 var master_slider: HSlider
 var sfx_slider: HSlider
 var music_slider: HSlider
@@ -65,6 +71,7 @@ var selected_cap: int = 12
 var selected_spec: int = 12
 var selected_bots: bool = true
 var selected_bots_shoot: bool = true
+var selected_bots_move: bool = true
 var invert_y: bool = false
 
 var _mode_btns: Array[Button] = []
@@ -78,6 +85,8 @@ var _bot_yes: Button
 var _bot_no: Button
 var _shoot_yes: Button
 var _shoot_no: Button
+var _move_yes: Button
+var _move_no: Button
 var _local_dedicated: LocalDedicated
 var _game_client: GameClient
 var _connecting := false
@@ -99,6 +108,7 @@ func _ready() -> void:
 	_setup_settings_ui()
 	_rebuild_binds_ui()
 	InputBinds.bindings_changed.connect(_rebuild_binds_ui)
+	InputBinds.bindings_changed.connect(_refresh_bind_chrome)
 	_refresh_brief()
 	_render_server_list()
 
@@ -125,7 +135,16 @@ func _process(dt: float) -> void:
 
 
 func _on_screen_changed(screen_name: String) -> void:
-	stage_glows.visible = screen_name == "menu"
+	var on_home := screen_name == "menu"
+	stage_glows.visible = on_home
+	if stage_host:
+		stage_host.visible = on_home
+		var vp := stage_host.get_child(0) as SubViewport
+		if vp:
+			vp.render_target_update_mode = (
+				SubViewport.UPDATE_ALWAYS if on_home else SubViewport.UPDATE_DISABLED)
+	if _menu_stage:
+		_menu_stage.set_active(on_home)
 	if screen_name == "callsign":
 		callsign_input.grab_focus()
 
@@ -133,19 +152,44 @@ func _on_screen_changed(screen_name: String) -> void:
 func _build() -> void:
 	add_child(MenuLook.shader_rect(MenuLook.SH_BG))
 
+	_menu_stage = MenuStage.new()
+
 	stage_glows = Control.new()
 	stage_glows.set_anchors_preset(Control.PRESET_FULL_RECT)
-	stage_glows.anchor_left = 0.54
-	stage_glows.anchor_top = 0.26
+	stage_glows.anchor_left = 0.50
+	stage_glows.anchor_top = 0.22
 	stage_glows.anchor_right = 1.0
 	stage_glows.anchor_bottom = 0.96
 	stage_glows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage_glows.visible = false
 	var glows := HBoxContainer.new()
 	MenuLook.fill(glows)
-	glows.add_child(MenuLook.glow_rect(false))
-	glows.add_child(MenuLook.glow_rect(true))
+	for team in _menu_stage.teams:
+		glows.add_child(MenuLook.glow_rect(team == "red"))
 	stage_glows.add_child(glows)
 	add_child(stage_glows)
+
+	stage_host = SubViewportContainer.new()
+	stage_host.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stage_host.anchor_left = 0.50
+	stage_host.anchor_top = 0.16
+	stage_host.anchor_right = 1.0
+	stage_host.anchor_bottom = 0.96
+	stage_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stage_host.stretch = true
+	stage_host.visible = false
+	var stage_vp := SubViewport.new()
+	stage_vp.transparent_bg = true
+	stage_vp.own_world_3d = true
+	stage_vp.msaa_3d = Viewport.MSAA_2X
+	stage_vp.handle_input_locally = false
+	stage_vp.gui_disable_input = true
+	stage_vp.audio_listener_enable_3d = false
+	stage_vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	stage_vp.size = Vector2i(960, 860)
+	stage_vp.add_child(_menu_stage)
+	stage_host.add_child(stage_vp)
+	add_child(stage_host)
 
 	var floor_fade := MenuLook.shader_rect(MenuLook.SH_FADE)
 	floor_fade.anchor_top = 0.54
@@ -575,12 +619,12 @@ func _build_create() -> void:
 	left.add_child(bots)
 
 	bots_dev_wrap = VBoxContainer.new()
-	var shoot_head := MarginContainer.new()
-	shoot_head.add_theme_constant_override("margin_top", 22)
-	shoot_head.add_theme_constant_override("margin_bottom", 10)
+	var dev_head := MarginContainer.new()
+	dev_head.add_theme_constant_override("margin_top", 22)
+	dev_head.add_theme_constant_override("margin_bottom", 10)
 	var head_row := HBoxContainer.new()
 	head_row.add_theme_constant_override("separation", 8)
-	head_row.add_child(MenuLook.kicker("Bots shoot back"))
+	head_row.add_child(MenuLook.kicker("Bot behaviour"))
 	var tag := MenuLook.kicker("DEV", Color("#ffd24a"), 9)
 	var tag_box := PanelContainer.new()
 	var ts := StyleBoxFlat.new()
@@ -595,19 +639,27 @@ func _build_create() -> void:
 	tag_box.add_theme_stylebox_override("panel", ts)
 	tag_box.add_child(tag)
 	head_row.add_child(tag_box)
-	shoot_head.add_child(head_row)
-	bots_dev_wrap.add_child(shoot_head)
-	var shoot := HBoxContainer.new()
-	shoot.add_theme_constant_override("separation", 10)
+	dev_head.add_child(head_row)
+	bots_dev_wrap.add_child(dev_head)
+
+	# Two switches side by side: a bot that neither shoots nor moves is a
+	# stationary target, and each half is useful on its own.
+	var dev_toggles := HBoxContainer.new()
+	dev_toggles.add_theme_constant_override("separation", 28)
+
 	_shoot_yes = _make_yn("YES", true)
 	_shoot_no = _make_yn("NO", false)
-	_shoot_yes.set_meta("active", selected_bots_shoot)
-	_shoot_no.set_meta("active", not selected_bots_shoot)
 	_shoot_yes.pressed.connect(func() -> void: selected_bots_shoot = true; _paint_yn(); _refresh_brief())
 	_shoot_no.pressed.connect(func() -> void: selected_bots_shoot = false; _paint_yn(); _refresh_brief())
-	shoot.add_child(_shoot_yes)
-	shoot.add_child(_shoot_no)
-	bots_dev_wrap.add_child(shoot)
+	dev_toggles.add_child(_yn_group("Shoot back", _shoot_yes, _shoot_no))
+
+	_move_yes = _make_yn("YES", true)
+	_move_no = _make_yn("NO", false)
+	_move_yes.pressed.connect(func() -> void: selected_bots_move = true; _paint_yn(); _refresh_brief())
+	_move_no.pressed.connect(func() -> void: selected_bots_move = false; _paint_yn(); _refresh_brief())
+	dev_toggles.add_child(_yn_group("Move", _move_yes, _move_no))
+
+	bots_dev_wrap.add_child(dev_toggles)
 	left.add_child(bots_dev_wrap)
 	_paint_yn()
 
@@ -637,6 +689,9 @@ func _build_create() -> void:
 	brief_shoot_row = HBoxContainer.new()
 	bv.add_child(brief_shoot_row)
 	brief_bots_shoot = _kv_into(brief_shoot_row, "Bots shoot", "Yes")
+	brief_move_row = HBoxContainer.new()
+	bv.add_child(brief_move_row)
+	brief_bots_move = _kv_into(brief_move_row, "Bots move", "Yes")
 	sum_total = _kv(bv, "Room holds", "12 + 12 = 24")
 
 	server_in = LineEdit.new()
@@ -865,7 +920,8 @@ func _build_chrome() -> void:
 	menu_chrome.add_child(foot)
 	var fh := HBoxContainer.new()
 	foot.add_child(fh)
-	fh.add_child(MenuLook.kicker("WASD move · SPACE jump · C crouch · Y chat · M team · F1 controls", MenuLook.MUTE_3, 10))
+	fh.add_child(MenuLook.kicker(_footer_binds_text(), MenuLook.MUTE_3, 10))
+	_foot_binds = fh.get_child(fh.get_child_count() - 1) as Label
 	var fsp := Control.new()
 	fsp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	fh.add_child(fsp)
@@ -1015,6 +1071,20 @@ func _make_yn(text: String, is_yes: bool) -> Button:
 	return btn
 
 
+## A captioned YES/NO pair, so several of them can sit in one row without the
+## reader losing track of which switch is which.
+func _yn_group(caption: String, yes_btn: Button, no_btn: Button) -> VBoxContainer:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 6)
+	col.add_child(MenuLook.kicker(caption, MenuLook.MUTE_3, 9))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(yes_btn)
+	row.add_child(no_btn)
+	col.add_child(row)
+	return col
+
+
 func _sec(text: String, no_top := false) -> MarginContainer:
 	var wrap := MarginContainer.new()
 	wrap.add_theme_constant_override("margin_top", 0 if no_top else 22)
@@ -1129,6 +1199,10 @@ func _paint_yn() -> void:
 	_shoot_no.set_meta("active", not selected_bots_shoot)
 	MenuLook.apply_opt(_shoot_yes, selected_bots_shoot, "yn")
 	MenuLook.apply_opt(_shoot_no, not selected_bots_shoot, "yn")
+	_move_yes.set_meta("active", selected_bots_move)
+	_move_no.set_meta("active", not selected_bots_move)
+	MenuLook.apply_opt(_move_yes, selected_bots_move, "yn")
+	MenuLook.apply_opt(_move_no, not selected_bots_move, "yn")
 
 
 func _exclusive(btns: Array[Button], picked: Button) -> void:
@@ -1205,6 +1279,7 @@ func _refresh_brief() -> void:
 	sum_spec.text = "+%d" % selected_spec
 	brief_bots.text = "On" if selected_bots else "Off"
 	brief_bots_shoot.text = "Yes" if selected_bots_shoot else "No"
+	brief_bots_move.text = "Yes" if selected_bots_move else "No"
 	sum_total.text = "%d + %d = %d" % [selected_cap, selected_spec, selected_cap + selected_spec]
 	rounds_label.text = ("ROUNDS TO WIN" if classic else "KILLS TO WIN")
 	rounds_row.visible = classic
@@ -1212,6 +1287,7 @@ func _refresh_brief() -> void:
 	var show_dev := DevMode.active and selected_bots
 	bots_dev_wrap.visible = show_dev
 	brief_shoot_row.visible = show_dev
+	brief_move_row.visible = show_dev
 	if brief_host:
 		brief_host.text = _callsign if not _callsign.is_empty() else "Guest"
 	if sum_network:
@@ -1247,14 +1323,12 @@ func _on_launch() -> void:
 	launch_note.text = "Starting local server..."
 
 	_local_dedicated = LocalDedicated.new()
-	var sname := server_in.text.strip_edges()
-	var port := _local_dedicated.start(selected_map, sname)
+	var port := _local_dedicated.start()
 	if port < 0:
 		launch_note.text = "Failed to start the local server."
 		_connecting = false
 		return
 
-	# Give the server a moment to bind before connecting.
 	await get_tree().create_timer(0.6).timeout
 	if not is_inside_tree():
 		_cleanup_launch()
@@ -1262,6 +1336,18 @@ func _on_launch() -> void:
 
 	launch_note.text = "Connecting..."
 	_game_client = GameClient.new()
+	_game_client.set_create_settings({
+		"map": selected_map,
+		"mode": selected_mode,
+		"rounds": selected_rounds,
+		"kills": selected_kills,
+		"max_players": selected_cap,
+		"max_spectators": selected_spec,
+		"bots": selected_bots,
+		"bots_shoot": selected_bots_shoot,
+		"bots_move": selected_bots_move,
+		"display_name": server_in.text.strip_edges(),
+	})
 	add_child(_game_client)
 	_game_client.connected_to_lobby.connect(_on_lobby_joined)
 	_game_client.connection_failed.connect(_on_connect_failed)
@@ -1280,6 +1366,7 @@ func _on_lobby_joined(init_data: Dictionary) -> void:
 	var match_scene = packed.instantiate()
 	match_scene.init_data = init_data
 	match_scene.game_client = _game_client
+	match_scene.local_callsign = _callsign
 
 	# Stash the launcher so the menu can kill the server when it comes back.
 	match_scene.set_meta("_local_dedicated", _local_dedicated)
@@ -1331,6 +1418,23 @@ func _on_designer_pressed() -> void:
 func _on_reset_binds() -> void:
 	InputBinds.reset_to_defaults()
 	_rebuild_binds_ui()
+	_refresh_bind_chrome()
+
+
+func _footer_binds_text() -> String:
+	return "%s move · %s jump · %s crouch · %s chat · %s team · %s controls" % [
+		"WASD",
+		InputBinds.primary("jump").to_upper(),
+		InputBinds.primary("crouch").to_upper(),
+		InputBinds.primary("chat_all").to_upper(),
+		InputBinds.primary("team_menu").to_upper(),
+		InputBinds.primary("controls").to_upper(),
+	]
+
+
+func _refresh_bind_chrome() -> void:
+	if _foot_binds:
+		_foot_binds.text = _footer_binds_text()
 
 
 func _load_callsign() -> void:

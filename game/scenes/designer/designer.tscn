@@ -137,7 +137,7 @@ theme_override_colors/font_color = Color(0.306, 0.886, 0.961, 1)
 
 [node name="Hint" type="Label" parent="UILayer/DesignerHUD/ControlsPanel/Scroll/ControlsList"]
 layout_mode = 2
-text = "F1 or ESC to close"
+text = "H or ESC to close"
 theme_override_font_sizes/font_size = 11
 theme_override_colors/font_color = Color(0.604, 0.651, 0.761, 0.6)
 
@@ -244,7 +244,7 @@ offset_top = -24.0
 offset_right = 250.0
 grow_horizontal = 2
 grow_vertical = 0
-text = "WASD move · SHIFT walk · C crouch · SPACE jump · click view to look · ESC frees cursor · F1 controls"
+text = "WASD move · SHIFT walk · C crouch · SPACE jump · click view to look · ESC frees cursor · H controls"
 horizontal_alignment = 1
 theme_override_font_sizes/font_size = 11
 theme_override_colors/font_color = Color(1, 1, 1, 0.4)

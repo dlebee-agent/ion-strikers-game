@@ -4,6 +4,9 @@ extends RefCounted
 const _SkyCubemap := preload("res://maps/sky_cubemap.gd")
 const _SkyDrift := preload("res://maps/sky_drift.gd")
 
+const LAYER_WORLD := 1
+const LAYER_PAWNS := 2
+
 # Builds a compiled map into meshes + colliders.  Client calls build_visual()
 # for the full scene; server only needs build_colliders() for AABB physics.
 
@@ -18,6 +21,31 @@ static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 	for b: Dictionary in compiled["cover"]:
 		out.append(_box_to_aabb(b))
 	return out
+
+
+static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
+	var arena: float = compiled["arena"]
+
+	_add_static_box(parent, Vector3(0.0, -1.0, 0.0), Vector3(arena * 2, 2.0, arena * 2))
+
+	for b: Dictionary in compiled["walls"]:
+		_add_static_box(parent, _box_center(b), _box_size(b))
+
+	for b: Dictionary in compiled["cover"]:
+		_add_static_box(parent, _box_center(b), _box_size(b))
+
+
+static func _add_static_box(parent: Node3D, pos: Vector3, sz: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = LAYER_WORLD
+	body.collision_mask = 0
+	body.position = pos
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = sz
+	col.shape = shape
+	body.add_child(col)
+	parent.add_child(body)
 
 
 static func build_visual(parent: Node3D, compiled: Dictionary) -> Array[AABB]:

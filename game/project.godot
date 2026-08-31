@@ -21,6 +21,7 @@ DevMode="*res://core/dev_mode.gd"
 InputBinds="*res://core/input_binds.gd"
 UiRoot="*res://core/ui_root.gd"
 AudioMix="*res://core/audio_mix.gd"
+Announcer="*res://core/announcer.gd"
 ConfirmPrompt="*res://ui/confirm_prompt.gd"
 
 [display]

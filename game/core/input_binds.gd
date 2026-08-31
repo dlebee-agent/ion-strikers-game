@@ -14,9 +14,8 @@ const BIND_DEFAULTS: Dictionary = {
 	"melee": ["Mouse2", ""],
 	"special": ["F", ""],
 	"scoreboard": ["Tab", "L"],
-	"controls": ["F1", ""],
+	"controls": ["H", ""],
 	"team_menu": ["M", ""],
-	"fullscreen": ["F11", ""],
 	"chat_all": ["Y", "Enter"],
 	"chat_team": ["U", ""],
 }
@@ -25,7 +24,7 @@ const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
 	["Combat", ["fire", "melee", "special"]],
 	["Communication", ["chat_all", "chat_team"]],
-	["Interface", ["team_menu", "scoreboard", "controls", "fullscreen"]],
+	["Interface", ["team_menu", "scoreboard", "controls"]],
 ]
 
 const BIND_LABELS: Dictionary = {
@@ -42,7 +41,6 @@ const BIND_LABELS: Dictionary = {
 	"scoreboard": "Scoreboard (hold)",
 	"controls": "Controls card",
 	"team_menu": "Team menu",
-	"fullscreen": "Fullscreen",
 	"chat_all": "Global message",
 	"chat_team": "Team chat",
 }
@@ -78,6 +76,12 @@ func _load_saved() -> void:
 			bindings[action_name][0] = cfg.get_value("binds", action_name + "_primary", "")
 		if cfg.has_section_key("binds", action_name + "_alt"):
 			bindings[action_name][1] = cfg.get_value("binds", action_name + "_alt", "")
+	# Old defaults were F1, then H+F1. On Mac F1 is brightness-down, so anyone
+	# still on those defaults picks up H; a custom bind is left alone.
+	var ctrl: Array = bindings["controls"]
+	if (ctrl[0] == "F1" and (ctrl[1] as String).is_empty()) or (ctrl[0] == "H" and ctrl[1] == "F1"):
+		bindings["controls"] = BIND_DEFAULTS["controls"].duplicate()
+		save_bindings()
 
 func save_bindings() -> void:
 	var cfg := ConfigFile.new()
@@ -177,6 +181,23 @@ func get_display_name(key_name: String) -> String:
 	if key_name.is_empty():
 		return "—"
 	return key_name
+
+func primary(action_name: String) -> String:
+	if action_name not in bindings:
+		return ""
+	for k in bindings[action_name]:
+		if not (k as String).is_empty():
+			return k
+	return ""
+
+func fmt(action_name: String) -> String:
+	if action_name not in bindings:
+		return "—"
+	var parts: PackedStringArray = []
+	for k in bindings[action_name]:
+		if not (k as String).is_empty():
+			parts.append(get_display_name(k).to_upper())
+	return " / ".join(parts) if parts.size() > 0 else "—"
 
 func is_action_pressed(action_name: String) -> bool:
 	return Input.is_action_pressed("game_" + action_name)

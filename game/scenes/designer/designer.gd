@@ -7,7 +7,12 @@ const AnimDriver = preload("res://core/anim_driver.gd")
 # Long enough to cover the discharge clip plus its blend out.
 const SPECIAL_DISCHARGE_HOLD := 0.55
 
-const HINT_FP := "WASD move · SHIFT walk · C crouch · SPACE jump · click view to look · ESC frees cursor · F1 controls"
+func _fp_hint() -> String:
+	return "WASD move · SHIFT walk · %s crouch · %s jump · click view to look · ESC frees cursor · %s controls" % [
+		InputBinds.primary("crouch").to_upper(),
+		InputBinds.primary("jump").to_upper(),
+		InputBinds.primary("controls").to_upper(),
+	]
 const HINT_TP := "mouse orbits · WASD moves relative to camera (walk toward it to see the front) · scroll zooms · ESC frees cursor"
 const HINT_PREVIEW := "drag to orbit · scroll to zoom · ◀ ▶ steps clips · ESC to leave"
 
@@ -158,6 +163,7 @@ func _setup_pawn() -> void:
 	add_child(pawn)
 	pawn.setup(_colliders)
 	pawn.movement.position = Vector3(0, 0.1, 0)
+	pawn.weapon.special_armed = true
 
 func _setup_toolbar() -> void:
 	back_btn.pressed.connect(_on_back)
@@ -212,11 +218,12 @@ func _set_mode(mode: CameraRig.Mode) -> void:
 	elif mode == CameraRig.Mode.THIRD_PERSON:
 		hint_label.text = HINT_TP
 	else:
-		hint_label.text = HINT_FP
+		hint_label.text = _fp_hint()
 
 # Preview skips the locomotion state machine entirely, so the discharge would
 # hold its last frame forever. Put the body back once the clip has run.
 func _on_special_discharged() -> void:
+	pawn.weapon.special_armed = true
 	if pawn.camera_rig.mode != CameraRig.Mode.PREVIEW:
 		return
 	await get_tree().create_timer(SPECIAL_DISCHARGE_HOLD).timeout
@@ -309,6 +316,18 @@ func _unhandled_input(event: InputEvent) -> void:
 func _populate_controls_list() -> void:
 	for child in controls_list.get_children():
 		child.queue_free()
+
+	var title := Label.new()
+	title.text = "CONTROLS"
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(0.306, 0.886, 0.961, 1))
+	controls_list.add_child(title)
+
+	var close_hint := Label.new()
+	close_hint.text = "%s or ESC to close" % InputBinds.fmt("controls")
+	close_hint.add_theme_font_size_override("font_size", 11)
+	close_hint.add_theme_color_override("font_color", Color(0.604, 0.651, 0.761, 0.6))
+	controls_list.add_child(close_hint)
 
 	for group_data: Array in InputBinds.BIND_GROUPS:
 		var actions: Array = group_data[1]

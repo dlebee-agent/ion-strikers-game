@@ -2,33 +2,104 @@ extends Node3D
 
 const LocalPawn = preload("res://core/local_pawn.gd")
 const CameraRig = preload("res://core/camera_rig.gd")
+const RemotePawn = preload("res://core/remote_pawn.gd")
+const TracerBolt = preload("res://core/tracer_bolt.gd")
+const ImpactFlash = preload("res://core/impact_flash.gd")
+const SpecialBeam = preload("res://core/special_beam.gd")
 
 var pawn: LocalPawn
 var client: GameClient
 var _colliders: Array[AABB] = []
 var _map_id: String = "parkour"
+var _mode: String = "classic"
+var _my_team: int = 0
+var _in_stands := true
+var _alive := false
+var _special_armed := false
+var _special_spent := false
+var _special_progress := 0
 
-# Set before adding to tree by the launcher.
 var init_data: Dictionary = {}
 var game_client: GameClient
+var local_callsign: String = "Player"
+
+var _hud: MatchHud
+var _team_panel: TeamPanel
+var _remotes: Dictionary = {}  # peer_id → RemotePawn
+var _snap_time: float = 0.0
+var _last_snap_players: Array = []
+
+var _camera_rig: CameraRig
+var _orbit_target: int = 0
+var _orbit_idx: int = 0
+var _player_names: Dictionary = {}  # id → name
+
+const METEOR_WARN_LEAD := 2.0
+var _meteor_warn_until: float = 0.0
+
+## Cosmetic clock for the score bar. The server has no round time limit, so this
+## counts up from the last round start (match start in deathmatch).
+var _clock_start: float = 0.0
+var _win_rounds: int = 10
+var _max_spectators: int = 0
+var _last_kill_target: int = 50
+var _last_score_blue: int = 0
+var _last_score_red: int = 0
+var _last_round_num: int = 1
+
+const SCOREBOARD_REFRESH := 0.25
+var _scoreboard_next_refresh: float = 0.0
+var _match_over: bool = false
+var _match_winner: int = 0
 
 
 func _ready() -> void:
 	AudioMix.fade_out_keep_place(400.0)
 
 	_map_id = str(init_data.get("map", "parkour"))
+	_mode = str(init_data.get("mode", "classic"))
+	_win_rounds = int(init_data.get("win_rounds", 10))
+	_max_spectators = int(init_data.get("max_spectators", 0))
+	_clock_start = Time.get_ticks_msec() / 1000.0
 	client = game_client
+	var my_init_id := int(init_data.get("id", 0))
+	if my_init_id != 0:
+		_player_names[my_init_id] = local_callsign
 
 	_build_map()
-	_setup_pawn()
+	_setup_spectator_camera()
 	_build_hud()
-
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_build_team_panel()
 
 	if client:
 		add_child(client)
 		client.snap_received.connect(_on_snap)
 		client.connection_failed.connect(_on_connection_failed)
+		client.hit_received.connect(_on_hit)
+		client.tracer_received.connect(_on_tracer)
+		client.round_start_received.connect(_on_round_start)
+		client.round_end_received.connect(_on_round_end)
+		client.match_over_received.connect(_on_match_over)
+		client.respawn_received.connect(_on_respawn)
+		client.chat_received.connect(_on_chat)
+		client.special_received.connect(_on_special)
+		client.announce_received.connect(_on_announce)
+		client.meteor_received.connect(_on_meteor)
+		client.team_received.connect(_on_team)
+		client.team_opts_received.connect(_on_team_opts)
+		client.team_denied_received.connect(_on_team_denied)
+		client.roster_received.connect(_on_roster)
+
+	if Announcer:
+		Announcer.banner_requested.connect(_on_announcer_banner)
+
+	if _parse_round_state(str(init_data.get("round_state", "active"))) == Protocol.RS_OVER:
+		var winner := Protocol.TEAM_BLUE if _last_score_blue >= _last_score_red else Protocol.TEAM_RED
+		if _last_score_blue == _last_score_red:
+			winner = 0
+		_enter_match_over(winner)
+	else:
+		_show_team_panel()
 
 
 func _build_map() -> void:
@@ -42,90 +113,207 @@ func _build_map() -> void:
 	_colliders = MapBuilder.build_visual(self, compiled)
 
 
-func _setup_pawn() -> void:
+func _setup_spectator_camera() -> void:
+	_camera_rig = CameraRig.new()
+	var movement := preload("res://core/movement.gd").new()
+	movement.position = Vector3(0, 8, -20)
+	_camera_rig.setup(movement)
+	_camera_rig.set_mode(CameraRig.Mode.THIRD_PERSON)
+	add_child(_camera_rig)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _build_hud() -> void:
+	_hud = MatchHud.new()
+	add_child(_hud)
+	_hud.leave_requested.connect(_request_leave)
+	_hud.lobby_requested.connect(_exit_to_lobby)
+	_hud.team_menu_requested.connect(_show_team_panel)
+	_hud.controls_requested.connect(_toggle_controls_card)
+	_hud.chat_submitted.connect(_on_chat_submit)
+	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
+
+	var init_mode := str(init_data.get("mode", "classic"))
+	var score_blue := int(init_data.get("score_blue", 0))
+	var score_red := int(init_data.get("score_red", 0))
+	var round_num := int(init_data.get("round_num", 1))
+	var kill_target := int(init_data.get("kill_target", 50))
+	var round_state := _parse_round_state(str(init_data.get("round_state", "active")))
+	_last_kill_target = kill_target
+	_last_score_blue = score_blue
+	_last_score_red = score_red
+	_last_round_num = round_num
+	_hud.update_score(score_blue, score_red, round_num, init_mode, kill_target,
+		round_state, _win_rounds, 0, 0, _clock_text())
+
+
+func _build_team_panel() -> void:
+	_team_panel = TeamPanel.new()
+	add_child(_team_panel)
+	_team_panel.team_selected.connect(_on_team_select)
+	_team_panel.closed.connect(_on_team_panel_closed)
+
+
+func _show_team_panel() -> void:
+	if _match_over:
+		return
+	if _hud.is_controls_visible():
+		_hud.dismiss_controls_card()
+	if _team_panel.is_open():
+		_team_panel.close()
+		return
+	if client:
+		client.send_team_menu()
+	_team_panel.open()
+
+
+func _on_team_select(team: int) -> void:
+	if client:
+		client.send_set_team(team)
+
+
+func _on_team_panel_closed() -> void:
+	if _match_over:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		return
+	if not _in_stands and _alive:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		_hud.show_cursor_controls(false)
+
+
+func _toggle_controls_card() -> void:
+	if _hud.is_controls_visible():
+		_close_controls_card()
+		return
+	if _team_panel.is_open():
+		_team_panel.close()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_hud.present_controls_card()
+
+
+func _close_controls_card() -> void:
+	_hud.dismiss_controls_card()
+	if not _in_stands and _alive:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		_hud.show_cursor_controls(false)
+	else:
+		_hud.show_cursor_controls(true)
+
+
+# ── Team / spawn ─────────────────────────────────────────────────────────
+
+func _on_team(msg: Dictionary) -> void:
+	_my_team = int(msg.get("team", 0))
+	var is_alive := bool(msg.get("alive", false))
+
+	_team_panel.close()
+
+	if _my_team == Protocol.TEAM_NONE:
+		_enter_stands()
+		return
+
+	_in_stands = false
+	_hud.set_stands_mode(false, _my_team)
+
+	if is_alive:
+		var sx: float = float(msg.get("spawn_x", 0.0))
+		var sy: float = float(msg.get("spawn_y", 0.0))
+		var sz: float = float(msg.get("spawn_z", 0.0))
+		var yaw: float = float(msg.get("yaw", 0.0))
+		_spawn_local_pawn(Vector3(sx, sy, sz), yaw)
+
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_team_opts(msg: Dictionary) -> void:
+	if _match_over:
+		return
+	_team_panel.update_opts(
+		int(msg.get("current_team", 0)),
+		int(msg.get("blue_used", 0)), int(msg.get("blue_max", 6)),
+		int(msg.get("red_used", 0)), int(msg.get("red_max", 6)),
+		int(msg.get("spec_used", 0)), int(msg.get("spec_max", 12)))
+
+	if not _team_panel.is_open():
+		_team_panel.open()
+
+
+func _on_team_denied(msg: Dictionary) -> void:
+	_team_panel.show_denied(str(msg.get("reason", "Denied.")))
+
+
+func _enter_stands() -> void:
+	_in_stands = true
+	_alive = false
+	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
+
+	if pawn:
+		pawn.queue_free()
+		pawn = null
+
+	_setup_spectator_camera()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
+	if pawn:
+		pawn.queue_free()
+
+	if _camera_rig and _camera_rig.is_inside_tree():
+		_camera_rig.queue_free()
+		_camera_rig = null
+
 	pawn = LocalPawn.new()
 	add_child(pawn)
 	pawn.setup(_colliders)
+	pawn.movement.position = spawn_pos
+	pawn.movement.yaw = yaw
 
-	var sx: float = init_data.get("sx", 0.0)
-	var sy: float = init_data.get("sy", 0.0)
-	var sz: float = init_data.get("sz", 0.0)
-	pawn.movement.position = Vector3(sx, sy, sz)
-	pawn.movement.yaw = float(init_data.get("yaw", 180.0))
-
-	pawn.set_team("blue")
+	var team_str := "blue" if _my_team == Protocol.TEAM_BLUE else "red"
+	pawn.set_team(team_str)
 	pawn.camera_rig.set_mode(CameraRig.Mode.FIRST_PERSON)
 	pawn.set_mannequin_visible(false)
 	pawn.set_fp_arms_visible(true)
 
+	_alive = true
+	_special_spent = false
+	pawn.weapon.special_armed = _special_armed
+	_hud.update_hp(100)
+	_sync_special_hud()
 
-var _hud: Control
-var _status_label: Label
-var _leave_btn: Button
+	pawn.weapon.fired.connect(_on_local_fire)
+	pawn.weapon.melee_hit.connect(_on_local_melee)
+	pawn.weapon.special_started.connect(_on_local_special_start)
+	pawn.weapon.special_fired.connect(_on_local_special_fire)
+
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
-func _build_hud() -> void:
-	var layer := CanvasLayer.new()
-	layer.layer = 10
-	add_child(layer)
-
-	_hud = Control.new()
-	_hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	layer.add_child(_hud)
-
-	# Crosshair
-	var cross := Label.new()
-	cross.text = "+"
-	cross.add_theme_font_size_override("font_size", 24)
-	cross.add_theme_color_override("font_color", Color(0.6, 1.0, 1.0, 0.7))
-	cross.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cross.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	cross.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(cross)
-
-	# Top-left status
-	_status_label = Label.new()
-	_status_label.text = "LOBBY · LAN · %s" % _map_id.to_upper()
-	_status_label.add_theme_font_size_override("font_size", 14)
-	_status_label.add_theme_color_override("font_color", Color(0.5, 0.8, 0.9, 0.8))
-	_status_label.position = Vector2(20, 16)
-	_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(_status_label)
-
-	# Bottom hint
-	var hint := Label.new()
-	hint.text = "WASD move · SPACE jump · C crouch · ESC leave"
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color(0.4, 0.5, 0.6, 0.6))
-	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	hint.position = Vector2(20, -30)
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hud.add_child(hint)
-
-	# Leave button (top-right, visible when cursor is free)
-	_leave_btn = Button.new()
-	_leave_btn.text = "LEAVE"
-	_leave_btn.custom_minimum_size = Vector2(80, 36)
-	_leave_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_leave_btn.position = Vector2(-100, 16)
-	_leave_btn.pressed.connect(_request_leave)
-	_leave_btn.visible = false
-	_hud.add_child(_leave_btn)
-
+# ── Physics + input ──────────────────────────────────────────────────────
 
 func _physics_process(dt: float) -> void:
-	if pawn and not ConfirmPrompt.is_open():
+	var blocked := _team_panel.is_open() or ConfirmPrompt.is_open() or _hud.is_chat_open()
+	if pawn and _alive and not _in_stands and not _match_over and not blocked:
 		pawn.process_input(dt)
 		if client:
-			client.send_state(pawn.movement.position, pawn.movement.yaw, pawn.movement.pitch)
+			client.send_state(pawn.movement.position, pawn.movement.yaw,
+				pawn.movement.pitch, pawn.movement.is_crouching)
+		_sync_special_hud()
+
+	_snap_time += dt
+	for pid: int in _remotes:
+		var rp: RemotePawn = _remotes[pid]
+		rp.interpolate(_snap_time)
+
+	if _meteor_warn_until > 0.0 and _snap_time > _meteor_warn_until:
+		_hud.show_meteor_warning(false)
+		_meteor_warn_until = 0.0
 
 
 func _input(event: InputEvent) -> void:
-	if ConfirmPrompt.is_open():
+	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() or _match_over:
 		return
-	if event is InputEventMouseMotion and pawn and pawn.camera_rig:
+	if event is InputEventMouseMotion and pawn and pawn.camera_rig and _alive:
 		var motion := event as InputEventMouseMotion
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			pawn.camera_rig.handle_mouse_motion(motion.relative)
@@ -134,23 +322,460 @@ func _input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if ConfirmPrompt.is_open():
 		return
+
+	if _hud.is_chat_open():
+		if event.is_action_pressed("ui_cancel"):
+			_hud.close_chat()
+			get_viewport().set_input_as_handled()
+		return
+
+	if _team_panel.is_open():
+		# Keys (1/2/3, M, ESC) are owned by TeamPanel._input.
+		get_viewport().set_input_as_handled()
+		return
+
+	if _hud.is_controls_visible():
+		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
+			_close_controls_card()
+			get_viewport().set_input_as_handled()
+		return
+
+	if _match_over:
+		if event.is_action_pressed("ui_cancel"):
+			_exit_to_lobby()
+			get_viewport().set_input_as_handled()
+			return
+		if InputBinds.is_action_just_pressed("chat_all"):
+			_hud.open_chat(false)
+		if InputBinds.is_action_just_pressed("chat_team"):
+			_hud.open_chat(true)
+		return
+
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		if mb.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not _in_stands:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			_leave_btn.visible = false
+			_hud.show_cursor_controls(false)
 			return
+
 	if event.is_action_pressed("ui_cancel"):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-			_leave_btn.visible = true
+			_hud.show_cursor_controls(true)
 		else:
 			_request_leave()
 
+	if InputBinds.is_action_just_pressed("team_menu"):
+		_show_team_panel()
 
-func _on_snap(players: Array) -> void:
-	# Future: update remote player positions. Single-player lobby for now.
-	pass
+	if InputBinds.is_action_just_pressed("controls"):
+		_toggle_controls_card()
+
+	if InputBinds.is_action_just_pressed("scoreboard"):
+		_update_scoreboard()
+		_hud.set_scoreboard_visible(true)
+	if InputBinds.is_action_just_released("scoreboard"):
+		_hud.set_scoreboard_visible(false)
+
+	if InputBinds.is_action_just_pressed("chat_all"):
+		_hud.open_chat(false)
+	if InputBinds.is_action_just_pressed("chat_team"):
+		_hud.open_chat(true)
+
+
+# ── Combat events from local weapons ────────────────────────────────────
+
+func _on_local_fire() -> void:
+	if _match_over or not client or not pawn:
+		return
+	var origin := pawn.camera_rig.get_aim_origin()
+	var dir := pawn.camera_rig.get_aim_direction()
+	client.send_shot(origin, dir)
+
+
+func _on_local_melee() -> void:
+	if _match_over:
+		return
+	if client:
+		client.send_melee()
+
+
+func _on_local_special_start() -> void:
+	if _match_over:
+		return
+	if client:
+		client.send_special_start()
+
+
+func _on_local_special_fire() -> void:
+	_special_armed = false
+	_special_spent = true
+	_special_progress = 0
+	if pawn:
+		pawn.weapon.special_armed = false
+	_sync_special_hud()
+	if client:
+		client.send_special_fire()
+
+
+# ── Server events ────────────────────────────────────────────────────────
+
+func _on_snap(snap: Dictionary) -> void:
+	_snap_time = Time.get_ticks_msec() / 1000.0
+	var players: Array = snap.get("players", [])
+	_last_snap_players = players
+
+	var score_blue := int(snap.get("score_blue", 0))
+	var score_red := int(snap.get("score_red", 0))
+	var round_num := int(snap.get("round_num", 1))
+	var round_state := int(snap.get("round_state", 0))
+	var mode_int := int(snap.get("mode", 0))
+	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "classic"
+	var snap_kill_target := int(snap.get("kill_target", 50))
+	_win_rounds = int(snap.get("win_rounds", _win_rounds))
+	_mode = snap_mode
+	_last_kill_target = snap_kill_target
+	_last_score_blue = score_blue
+	_last_score_red = score_red
+	_last_round_num = round_num
+
+	var blue_alive := 0
+	var red_alive := 0
+	for p: Dictionary in players:
+		if (int(p.get("flags", 0)) & Protocol.PFLG_ALIVE) == 0:
+			continue
+		match int(p.get("team", 0)):
+			Protocol.TEAM_BLUE:
+				blue_alive += 1
+			Protocol.TEAM_RED:
+				red_alive += 1
+
+	_hud.update_score(score_blue, score_red, round_num, snap_mode, snap_kill_target,
+		round_state, _win_rounds, blue_alive, red_alive, _clock_text())
+
+	if round_state == Protocol.RS_OVER and not _match_over:
+		var winner := Protocol.TEAM_BLUE if score_blue >= score_red else Protocol.TEAM_RED
+		if score_blue == score_red:
+			winner = 0
+		_enter_match_over(winner)
+
+	# Rows are rebuilt wholesale, so refresh well below snapshot rate while held.
+	if _hud.is_scoreboard_visible() and _snap_time >= _scoreboard_next_refresh:
+		_scoreboard_next_refresh = _snap_time + SCOREBOARD_REFRESH
+		_update_scoreboard()
+
+	var seen_ids: Dictionary = {}
+	var my_id := client.my_id if client else 0
+
+	for p: Dictionary in players:
+		var pid: int = int(p.get("id", 0))
+		seen_ids[pid] = true
+
+		var pflags := int(p.get("flags", 0))
+		var p_alive := (pflags & Protocol.PFLG_ALIVE) != 0
+		var p_crouched := (pflags & Protocol.PFLG_CROUCHED) != 0
+		var p_protected := (pflags & Protocol.PFLG_PROTECTED) != 0
+		var p_bot := (pflags & Protocol.PFLG_BOT) != 0
+		var p_special_armed := (pflags & Protocol.PFLG_SPECIAL_ARMED) != 0
+		var p_special_charging := (pflags & Protocol.PFLG_SPECIAL_CHARGING) != 0
+
+		p["alive"] = p_alive
+		p["crouched"] = p_crouched
+		p["protected"] = p_protected
+		p["bot"] = p_bot
+		p["special_armed"] = p_special_armed
+		p["special_charging"] = p_special_charging
+
+		if pid == my_id:
+			if p_special_armed and _special_spent:
+				p_special_armed = false
+			elif not p_special_armed:
+				_special_spent = false
+			_special_armed = p_special_armed
+			_special_progress = int(p.get("special_progress", _special_progress))
+			if pawn and not pawn.weapon.is_special_charging():
+				pawn.weapon.special_armed = p_special_armed
+			if not _in_stands:
+				_hud.update_hp(int(p.get("hp", 100)))
+				_sync_special_hud()
+			continue
+
+		if _remotes.has(pid):
+			var rp: RemotePawn = _remotes[pid]
+			var p_team := int(p.get("team", 0))
+			if p_team != rp.team:
+				rp.set_team_value(p_team)
+			rp.push_snapshot(p, _snap_time)
+		else:
+			var p_team := int(p.get("team", 0))
+			if p_team == Protocol.TEAM_NONE:
+				continue
+			var rp := RemotePawn.new()
+			add_child(rp)
+			var rp_name: String = _player_names.get(pid, "Player %d" % pid)
+			rp.setup(pid, rp_name, p_team)
+			rp.push_snapshot(p, _snap_time)
+			_remotes[pid] = rp
+
+	var to_remove: Array[int] = []
+	for pid: int in _remotes:
+		if not seen_ids.has(pid):
+			to_remove.append(pid)
+	for pid: int in to_remove:
+		if _remotes.has(pid):
+			_remotes[pid].queue_free()
+			_remotes.erase(pid)
+
+
+func _on_hit(msg: Dictionary) -> void:
+	var target_id := int(msg.get("target_id", 0))
+	var by_id := int(msg.get("by_id", 0))
+	var killed := bool(msg.get("killed", false))
+	var head := bool(msg.get("head", false))
+	var cause := int(msg.get("cause", 0))
+	var by_name := str(msg.get("by_name", ""))
+	var target_name := str(msg.get("target_name", ""))
+	if not by_name.is_empty():
+		_player_names[by_id] = by_name
+	if not target_name.is_empty():
+		_player_names[target_id] = target_name
+
+	var my_id := client.my_id if client else 0
+	if killed:
+		_hud.show_kill(
+			by_name, target_name, cause, head,
+			int(msg.get("by_team", 0)), int(msg.get("target_team", 0)),
+			by_id == my_id or target_id == my_id)
+	if target_id == my_id:
+		_hud.update_hp(int(msg.get("hp", 0)))
+		if killed:
+			_alive = false
+			_special_armed = false
+			_special_spent = false
+			_special_progress = 0
+			if pawn:
+				pawn.cancel_special()
+				pawn.weapon.special_armed = false
+				pawn.set_mannequin_visible(false)
+				pawn.set_fp_arms_visible(false)
+			_sync_special_hud()
+			if Announcer:
+				Announcer.player_died()
+		else:
+			if Announcer:
+				Announcer.player_hurt()
+
+
+func _on_tracer(msg: Dictionary) -> void:
+	var by_id := int(msg.get("by_id", 0))
+	var my_id := client.my_id if client else 0
+	if by_id == my_id:
+		return
+
+	var origin := Vector3(float(msg.get("origin_x", 0.0)), float(msg.get("origin_y", 0.0)), float(msg.get("origin_z", 0.0)))
+	var dir := Vector3(float(msg.get("dir_x", 0.0)), float(msg.get("dir_y", 0.0)), float(msg.get("dir_z", 0.0)))
+	var team_val := int(msg.get("team", 1))
+	var team_str := "blue" if team_val == Protocol.TEAM_BLUE else "red"
+
+	var hit_dist := 200.0
+	for box in _colliders:
+		var t := _ray_aabb(origin, dir, box)
+		if t > 0.0 and t < hit_dist:
+			hit_dist = t
+
+	TracerBolt.spawn(self, origin, dir.normalized(), hit_dist, team_str)
+
+
+func _on_round_start(msg: Dictionary) -> void:
+	_clock_start = Time.get_ticks_msec() / 1000.0
+	_hud.hide_round_end()
+	_hud.show_banner("ROUND %d" % int(msg.get("round_num", 1)), MatchHud.WHITE)
+	if Announcer:
+		Announcer.round_start()
+
+
+func _on_round_end(msg: Dictionary) -> void:
+	var winner := int(msg.get("winner", 0))
+	var match_over := bool(msg.get("match_over", false))
+	var match_point := bool(msg.get("match_point", false))
+	var score_blue := int(msg.get("score_blue", _last_score_blue))
+	var score_red := int(msg.get("score_red", _last_score_red))
+	var round_num := int(msg.get("round_num", _last_round_num))
+	_last_score_blue = score_blue
+	_last_score_red = score_red
+	_last_round_num = round_num
+	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over)
+	if match_over:
+		_enter_match_over(winner)
+	if Announcer:
+		Announcer.round_end(winner, match_over, match_point)
+
+
+func _on_match_over(msg: Dictionary) -> void:
+	var winner := int(msg.get("winner", 0))
+	_enter_match_over(winner)
+	if not _hud.is_round_end_visible():
+		_hud.show_round_end(winner, _last_score_blue, _last_score_red, 0, true)
+		if Announcer:
+			Announcer.match_over(winner)
+
+
+func _on_respawn(msg: Dictionary) -> void:
+	if _match_over:
+		return
+	var pid := int(msg.get("id", 0))
+	var my_id := client.my_id if client else 0
+	if pid == my_id:
+		var sx := float(msg.get("x", 0.0))
+		var sy := float(msg.get("y", 0.0))
+		var sz := float(msg.get("z", 0.0))
+		var yaw := float(msg.get("yaw", 0.0))
+		_spawn_local_pawn(Vector3(sx, sy, sz), yaw)
+		# A round-start redeploy gets the round fanfare instead of the respawn sting.
+		if Announcer and not bool(msg.get("round_start", false)):
+			Announcer.player_respawn()
+
+
+func _on_chat(msg: Dictionary) -> void:
+	_hud.add_chat_message(
+		str(msg.get("name", "")),
+		str(msg.get("text", "")),
+		int(msg.get("team", 0)),
+		bool(msg.get("team_only", false)),
+		bool(msg.get("sys", false)))
+
+
+func _on_chat_submit(text: String, team_only: bool) -> void:
+	if client:
+		client.send_chat(text, team_only)
+	if not _match_over and not _in_stands and _alive:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_special(msg: Dictionary) -> void:
+	var by_id := int(msg.get("by_id", 0))
+	var phase := int(msg.get("phase", 0))
+	var my_id := client.my_id if client else 0
+
+	if phase == Protocol.SP_READY and by_id == my_id and not _special_spent:
+		_special_armed = true
+		_special_progress = 0
+		if pawn:
+			pawn.weapon.special_armed = true
+		if not _in_stands:
+			_sync_special_hud()
+			_hud.show_banner("SPECIAL READY", MatchHud.CYAN,
+				"HOLD %s TO CHARGE" % _special_key_label())
+		return
+
+	if by_id != my_id and _remotes.has(by_id):
+		var rp: RemotePawn = _remotes[by_id]
+		if phase == Protocol.SP_CHARGE:
+			rp.begin_special()
+		elif phase == Protocol.SP_FIRE:
+			rp.fire_special()
+		elif phase == Protocol.SP_END:
+			rp.end_special()
+
+	if phase == Protocol.SP_FIRE and by_id != my_id:
+		var from := Vector3(float(msg.get("from_x", 0.0)), float(msg.get("from_y", 0.0)), float(msg.get("from_z", 0.0)))
+		var hit := Vector3(float(msg.get("hit_x", 0.0)), float(msg.get("hit_y", 0.0)), float(msg.get("hit_z", 0.0)))
+		var team_val := int(msg.get("team", 1))
+		var team_str := "blue" if team_val == Protocol.TEAM_BLUE else "red"
+		var radius := float(msg.get("blast_radius", SpecialBeam.DEFAULT_RADIUS))
+		SpecialBeam.spawn(self, from, hit, team_str, radius, false)
+
+
+func _on_announce(msg: Dictionary) -> void:
+	var my_id := client.my_id if client else 0
+	if int(msg.get("by_id", 0)) == my_id and msg.has("special_progress"):
+		_special_progress = int(msg.get("special_progress", _special_progress))
+		_sync_special_hud()
+	if Announcer:
+		Announcer.handle_announce(msg)
+
+
+func _on_announcer_banner(text: String, color: Color, sub: String) -> void:
+	if _match_over or _hud.is_round_end_visible():
+		return
+	_hud.show_banner(text, color, sub)
+
+
+func _on_meteor(msg: Dictionary) -> void:
+	if _match_over:
+		return
+	_meteor_warn_until = _snap_time + METEOR_WARN_LEAD
+	_hud.show_meteor_warning(true)
+
+
+func _on_roster(msg: Dictionary) -> void:
+	for e: Dictionary in msg.get("entries", []):
+		_player_names[int(e.get("id", 0))] = str(e.get("name", ""))
+	if _hud.is_scoreboard_visible():
+		_update_scoreboard()
+
+
+func _clock_text() -> String:
+	var elapsed := int(maxf(0.0, Time.get_ticks_msec() / 1000.0 - _clock_start))
+	return "%d:%02d" % [elapsed / 60, elapsed % 60]
+
+
+func _sync_special_hud() -> void:
+	if not _hud or _in_stands:
+		return
+	if pawn and _alive:
+		_hud.set_special(
+			pawn.weapon.special_armed,
+			pawn.weapon.is_special_charging(),
+			pawn.weapon.get_special_charge_fraction(),
+			pawn.weapon.is_special_releasable(),
+			_special_progress)
+	else:
+		_hud.set_special(_special_armed, false, 0.0, false, _special_progress)
+
+
+func _special_key_label() -> String:
+	if not InputBinds or not InputBinds.bindings.has("special"):
+		return "F"
+	var slots: Array = InputBinds.bindings["special"]
+	var key := str(slots[0]) if slots.size() > 0 else ""
+	if key.is_empty() and slots.size() > 1:
+		key = str(slots[1])
+	return key if not key.is_empty() else "F"
+
+
+func _update_scoreboard() -> void:
+	var enriched: Array[Dictionary] = []
+	for p: Dictionary in _last_snap_players:
+		var pid := int(p.get("id", 0))
+		var entry := p.duplicate()
+		entry["name"] = _player_names.get(pid, "Player %d" % pid)
+		var pflags := int(p.get("flags", 0))
+		entry["alive"] = (pflags & Protocol.PFLG_ALIVE) != 0
+		entry["bot"] = (pflags & Protocol.PFLG_BOT) != 0
+		enriched.append(entry)
+
+	var info := {
+		"mode": _mode,
+		"kill_target": _last_kill_target,
+		"win_rounds": _win_rounds,
+		"map_name": _map_display_name(),
+		"my_id": client.my_id if client else 0,
+		"max_spectators": _max_spectators,
+		"score_blue": _last_score_blue,
+		"score_red": _last_score_red,
+		"match_over": _match_over,
+		"winner": _match_winner,
+	}
+	_hud.update_scoreboard(info, enriched)
+
+
+func _map_display_name() -> String:
+	match _map_id:
+		"parkour":
+			return "Parkour Yard"
+		_:
+			return _map_id.capitalize()
 
 
 func _on_connection_failed(reason: String) -> void:
@@ -160,8 +785,34 @@ func _on_connection_failed(reason: String) -> void:
 
 func _request_leave() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_leave_btn.visible = true
+	_hud.show_cursor_controls(true)
 	ConfirmPrompt.ask("Leave this lobby?", _on_leave)
+
+
+func _exit_to_lobby() -> void:
+	_on_leave()
+
+
+func _enter_match_over(winner: int) -> void:
+	_match_winner = winner
+	if _match_over:
+		_hud.present_match_over(winner, _last_score_blue, _last_score_red, _mode)
+		_update_scoreboard()
+		return
+	_match_over = true
+	_alive = false
+	if pawn:
+		pawn.cancel_special()
+		pawn.weapon.special_armed = false
+	if _team_panel.is_open():
+		_team_panel.close()
+	if _hud.is_controls_visible():
+		_hud.dismiss_controls_card()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_hud.present_match_over(winner, _last_score_blue, _last_score_red, _mode)
+	_update_scoreboard()
+	if AudioMix:
+		AudioMix.play_match_over()
 
 
 func _on_leave() -> void:
@@ -180,3 +831,32 @@ func _notification(what: int) -> void:
 		var launcher = get_meta("_local_dedicated") if has_meta("_local_dedicated") else null
 		if launcher:
 			launcher.stop()
+
+
+func _parse_round_state(s: String) -> int:
+	if s == "ended":
+		return Protocol.RS_ENDED
+	if s == "over":
+		return Protocol.RS_OVER
+	return Protocol.RS_ACTIVE
+
+
+func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:
+	var tmin := -1e20
+	var tmax := 1e20
+	for i in 3:
+		if absf(dir[i]) < 1e-8:
+			if origin[i] < box.position[i] or origin[i] > box.end[i]:
+				return -1.0
+		else:
+			var t1 := (box.position[i] - origin[i]) / dir[i]
+			var t2 := (box.end[i] - origin[i]) / dir[i]
+			if t1 > t2:
+				var tmp := t1
+				t1 = t2
+				t2 = tmp
+			tmin = maxf(tmin, t1)
+			tmax = minf(tmax, t2)
+			if tmin > tmax:
+				return -1.0
+	return tmin if tmin > 0.0 else -1.0

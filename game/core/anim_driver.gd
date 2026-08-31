@@ -52,6 +52,9 @@ var current_state: State = State.IDLE
 var _anim_player: AnimationPlayer
 var _mannequin: Node3D
 var _available_clips: PackedStringArray = []
+# First play has to land even when the resolved state is already IDLE, otherwise
+# the skeleton sits in bind pose (T-pose) until the player starts moving.
+var _posed := false
 
 # A pose that locomotion must not steal back. The channel is not cancellable, so
 # the body must not look like it can be; the discharge and the punch hold for as
@@ -67,6 +70,8 @@ func setup(mannequin: Node3D) -> void:
 	_anim_player = _find_animation_player(mannequin)
 	if _anim_player:
 		_available_clips = _anim_player.get_animation_list()
+	# Seed the pistol-idle pose immediately so a spawned body is armed, not T-posed.
+	_apply_state(State.IDLE)
 
 func get_clip_list() -> PackedStringArray:
 	return _available_clips
@@ -75,6 +80,7 @@ func play_clip(clip_name: String) -> void:
 	_release_holds()
 	if _anim_player and _anim_player.has_animation(clip_name):
 		_anim_player.play(clip_name)
+		_anim_player.advance(0.0)
 
 func update_from_movement(movement: Movement) -> void:
 	# Death keeps the body on the floor and the victory dance runs to the end of
@@ -84,12 +90,18 @@ func update_from_movement(movement: Movement) -> void:
 	if _channeling or Time.get_ticks_msec() < _hold_until_ms:
 		return
 	var new_state := _resolve_state(movement)
-	if new_state != current_state:
+	if new_state != current_state or not _posed:
 		_apply_state(new_state)
 
 func set_state(state: State) -> void:
-	if state != current_state:
+	if state != current_state or not _posed:
 		_apply_state(state)
+
+# Leave death/dance (or a stuck channel) so a respawn can stand up armed again.
+func reset_locomotion() -> void:
+	_release_holds()
+	_posed = false
+	_apply_state(State.IDLE)
 
 # ---- one-shot moves ----
 
@@ -135,15 +147,27 @@ func _clip_length(state: State) -> float:
 # than a missing one — say so once, then let the body keep moving.
 func _clip_for(state: State) -> String:
 	var clip_name: String = ANIM_MAP.get(state, "")
-	if _anim_player.has_animation(clip_name):
-		return clip_name
+	var found := _resolve_clip_name(clip_name)
+	if not found.is_empty():
+		return found
 	if not clip_name.ends_with(GUN_READY_SUFFIX):
 		return ""
 	if not _warned_missing_bake:
 		_warned_missing_bake = true
 		push_warning("No gun-ready clips on this rig; reimport mannequin.glb.")
-	var raw := clip_name.trim_suffix(GUN_READY_SUFFIX)
-	return raw if _anim_player.has_animation(raw) else ""
+	return _resolve_clip_name(clip_name.trim_suffix(GUN_READY_SUFFIX))
+
+# Godot's importer strips a trailing "_Loop"; keep a lookup for the raw GLB name
+# too, so a reimport that skipped that pass still finds the clip.
+func _resolve_clip_name(clip_name: String) -> String:
+	if clip_name.is_empty() or not is_instance_valid(_anim_player):
+		return ""
+	if _anim_player.has_animation(clip_name):
+		return clip_name
+	var looped := clip_name + "_Loop"
+	if _anim_player.has_animation(looped):
+		return looped
+	return ""
 
 func _resolve_state(movement: Movement) -> State:
 	if not movement.on_ground:
@@ -161,17 +185,22 @@ func _resolve_state(movement: Movement) -> State:
 
 func _apply_state(state: State) -> void:
 	current_state = state
+	_posed = true
 	if not is_instance_valid(_anim_player):
 		return
 	var clip_name := _clip_for(state)
 	if clip_name.is_empty():
 		return
 	var looping := state in LOOPING_STATES
-	_anim_player.play(clip_name, BLEND_LOOP if looping else BLEND_ONE_SHOT)
+	# Snap the first pose on; blending from bind-pose T-pose reads as a glitch.
+	var blend := 0.0 if not _anim_player.is_playing() else (BLEND_LOOP if looping else BLEND_ONE_SHOT)
+	_anim_player.play(clip_name, blend)
 	if not looping:
 		# Restart from the top even when this clip is already the current one, so a
 		# retriggered punch reads as a second punch rather than as nothing.
 		_anim_player.seek(0.0, true)
+	# Sample the first frame now so the body is not T-posed until the next tick.
+	_anim_player.advance(0.0)
 
 func _find_animation_player(node: Node) -> AnimationPlayer:
 	if node is AnimationPlayer:

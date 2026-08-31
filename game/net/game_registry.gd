@@ -1,13 +1,11 @@
 class_name GameRegistry
 extends RefCounted
 
-# Owns GameInstances keyed by game_id.  For local_dedicated max_lobbies=1.
-
 var max_lobbies: int = 1
 var instances: Dictionary = {}   # game_id → GameInstance
 
 
-func preload_instance(cfg: Dictionary) -> GameInstance:
+func create(cfg: Dictionary) -> GameInstance:
 	if instances.size() >= max_lobbies:
 		return null
 	var inst := GameInstance.new(cfg)
@@ -16,7 +14,7 @@ func preload_instance(cfg: Dictionary) -> GameInstance:
 
 
 func resolve_join_direct() -> GameInstance:
-	if max_lobbies == 1 and instances.size() == 1:
+	if instances.size() == 1:
 		return instances.values()[0]
 	return null
 

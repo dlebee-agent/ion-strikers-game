@@ -1,13 +1,11 @@
 class_name LocalDedicated
 extends RefCounted
 
-# Spawns and manages a headless dedicated server child process.
-
 var pid: int = -1
 var port: int = 7777
 
 
-func start(map_id: String, server_name: String) -> int:
+func start() -> int:
 	port = _pick_port()
 	var exe := OS.get_executable_path()
 	var project_path := ProjectSettings.globalize_path("res://")
@@ -18,11 +16,8 @@ func start(map_id: String, server_name: String) -> int:
 		"--",
 		"--dedicated", "--local",
 		"--port", str(port),
-		"--map", map_id,
+		"--parent-pid", str(OS.get_process_id()),
 	]
-	if not server_name.is_empty():
-		args.append("--name")
-		args.append(server_name)
 
 	pid = OS.create_process(exe, args)
 	if pid <= 0:
@@ -40,7 +35,4 @@ func stop() -> void:
 
 
 func _pick_port() -> int:
-	# Try 7777 first, then increment.  We can't probe UDP easily from GDScript
-	# so we just try; if the server fails to bind it exits with code 1 and the
-	# client retries on the next port.
 	return 7777

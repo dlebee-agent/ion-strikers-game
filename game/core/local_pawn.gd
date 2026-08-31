@@ -68,8 +68,9 @@ const FP_MELEE_SPEED := 1.4
 const FP_MELEE_HOLD := 0.48
 const FP_SPELL_HANDOFF_LEAD := 0.12
 
-# How far the special's beam reaches when it hits nothing.
-const SPECIAL_RANGE := 60.0
+# How far the special's beam reaches when it hits nothing. Must match the
+# server's SPECIAL_RANGE so the blast you see is the blast that kills.
+const SPECIAL_RANGE := 45.0
 
 # The rig is authored facing +Z (toes point +Z), but a yaw of 0 in this game means
 # facing -Z, so the body carries a half turn on top of its aim yaw.
@@ -212,6 +213,7 @@ func _fp_play_idle() -> void:
 	# Validity, not just null: a queued return-to-idle can outlive the scene.
 	if is_instance_valid(_fp_anim_player) and _fp_anim_player.has_animation(FP_IDLE_CLIP):
 		_fp_anim_player.play(FP_IDLE_CLIP, FP_BLEND_IDLE)
+		_fp_anim_player.advance(0.0)
 
 func _fp_play_once(clip: String, speed: float, hold: float) -> void:
 	if not _fp_anim_player or not _fp_anim_player.has_animation(clip):
@@ -274,6 +276,14 @@ func _on_special_fired() -> void:
 	_clear_charge_orbs()
 	_spawn_special_beam()
 
+
+func cancel_special() -> void:
+	weapon.cancel_special()
+	_fp_once_gen += 1
+	_fp_play_idle()
+	anim_driver.end_spell()
+	_clear_charge_orbs()
+
 func _attach_charge_orbs() -> void:
 	_clear_charge_orbs()
 	_fp_charge_orb = ChargeOrb.attach(_fp_skeleton, team_color, true)
@@ -296,7 +306,7 @@ func _spawn_special_beam() -> void:
 
 	var eye := camera_rig.get_aim_origin()
 	var dir := camera_rig.get_aim_direction()
-	var dist := minf(weapon.raycast_distance(eye, dir, _colliders), SPECIAL_RANGE)
+	var dist := weapon.raycast_special(eye, dir, _colliders, SPECIAL_RANGE)
 	var impact := eye + dir * dist
 	var first_person := camera_rig.mode == CameraRig.Mode.FIRST_PERSON
 	SpecialBeam.spawn(scene, _beam_origin(eye, dir, impact, first_person), impact,

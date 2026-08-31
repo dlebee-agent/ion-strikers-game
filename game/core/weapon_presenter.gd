@@ -23,6 +23,9 @@ const ImpactFlash = preload("res://core/impact_flash.gd")
 
 # Colours the bolts and their impacts. Set by whoever owns this weapon.
 var team: String = "blue"
+# Match play only arms this after a five-frag streak; the designer leaves it on
+# so the preview can fire without earning one.
+var special_armed := false
 
 var _fire_cooldown := 0.0
 var _melee_cooldown := 0.0
@@ -84,7 +87,7 @@ func try_melee() -> void:
 	melee_hit.emit()
 
 func start_special() -> void:
-	if _special_charging:
+	if _special_charging or not special_armed:
 		return
 	_special_charging = true
 	_special_released = false
@@ -105,7 +108,16 @@ func _finish_special() -> void:
 	_special_charging = false
 	_special_released = false
 	_special_charge_time = 0.0
+	special_armed = false
 	special_fired.emit()
+
+
+func cancel_special() -> void:
+	if not _special_charging:
+		return
+	_special_charging = false
+	_special_released = false
+	_special_charge_time = 0.0
 
 func is_special_charging() -> bool:
 	return _special_charging
@@ -144,14 +156,23 @@ func _spawn_tracer(origin: Vector3, muzzle: Vector3, direction: Vector3, collide
 
 
 func raycast_distance(origin: Vector3, dir: Vector3, colliders: Array[AABB]) -> float:
-	var max_dist := 200.0
-	var hit_dist := max_dist
+	return _raycast_colliders(origin, dir, colliders, 200.0, false)
 
+
+func raycast_special(origin: Vector3, dir: Vector3, colliders: Array[AABB],
+		max_dist: float) -> float:
+	return _raycast_colliders(origin, dir, colliders, max_dist, true)
+
+
+func _raycast_colliders(origin: Vector3, dir: Vector3, colliders: Array[AABB],
+		max_dist: float, punch_cover: bool) -> float:
+	var hit_dist := max_dist
 	for box in colliders:
+		if punch_cover and not Hitbox.special_blocks(box):
+			continue
 		var t := _ray_aabb(origin, dir, box)
 		if t > 0.0 and t < hit_dist:
 			hit_dist = t
-
 	return hit_dist
 
 func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:

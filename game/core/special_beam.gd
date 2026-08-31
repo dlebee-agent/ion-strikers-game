@@ -11,7 +11,7 @@ const SpecialBlast = preload("res://core/special_blast.gd")
 const BEAM_SPEED := 380.0        # m/s; crosses the full arena in ~120ms
 const BEAM_HOLD := 0.165         # full-length, full-width, before it lets go
 const BEAM_FADE := 0.34
-const DEFAULT_RADIUS := 4.5
+const DEFAULT_RADIUS := 8.0
 
 # Where YOUR OWN beam starts. The hand is centimetres from the camera, so drawing
 # from there puts the camera inside the beam and whites out the screen; and a beam
