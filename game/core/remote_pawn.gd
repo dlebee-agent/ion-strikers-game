@@ -320,9 +320,9 @@ func end_ragdoll() -> void:
 		ragdoll = null
 
 
-func tick_ragdoll(dt: float, colliders: Array[AABB]) -> void:
+func tick_ragdoll(dt: float, world: CollisionWorld) -> void:
 	if ragdoll:
-		ragdoll.update(dt, colliders)
+		ragdoll.update(dt, world)
 		if ragdoll.dead:
 			set_body_visible(false)
 			end_ragdoll()

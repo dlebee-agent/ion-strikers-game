@@ -15,7 +15,6 @@ const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 
 var pawn: LocalPawn
 var client: GameClient
-var _colliders: Array[AABB] = []
 var _world: CollisionWorld = null
 # Reused by every tracer, so a firefight allocates nothing.
 var _shot_trace := TraceResult.new()
@@ -134,7 +133,7 @@ func _build_map() -> void:
 
 func _build_builtin_map() -> void:
 	var compiled := MapEngine.compile(ParkourMap.definition())
-	_colliders = MapBuilder.build_visual(self, compiled)
+	MapBuilder.build_visual(self, compiled)
 	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
 
@@ -159,7 +158,6 @@ func _build_community_map() -> void:
 	var ambience := MapCatalog.ambience_for(level)
 	MapBuilder.build_ambience(self, ambience)
 
-	_colliders = level.colliders
 	_world = level.world
 	_arena_size = level.arena
 
@@ -346,7 +344,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 
 	pawn = LocalPawn.new()
 	add_child(pawn)
-	pawn.setup(_colliders, _world)
+	pawn.setup(_world)
 	pawn.movement.position = spawn_pos
 	pawn.movement.yaw = yaw
 
@@ -387,10 +385,10 @@ func _physics_process(dt: float) -> void:
 	for pid: int in _remotes:
 		var rp: RemotePawn = _remotes[pid]
 		rp.interpolate(_snap_time)
-		rp.tick_ragdoll(dt, _colliders)
+		rp.tick_ragdoll(dt, _world)
 
 	if _local_ragdoll:
-		_local_ragdoll.update(dt, _colliders)
+		_local_ragdoll.update(dt, _world)
 		if _local_ragdoll.dead:
 			if pawn:
 				pawn.set_mannequin_visible(false)
@@ -729,7 +727,7 @@ func _on_hit(msg: Dictionary) -> void:
 						pawn.set_mannequin_visible(false)
 						_spectator._death_mannequin = pawn.get_mannequin()
 					_spectator.start_death_ragdoll(body_pos, eye_pos,
-						_local_ragdoll, _colliders,
+						_local_ragdoll, _world,
 						_killer_world_pos(by_id))
 			_sync_special_hud()
 			if Announcer:

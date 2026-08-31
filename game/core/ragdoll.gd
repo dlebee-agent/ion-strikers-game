@@ -4,7 +4,7 @@ extends RefCounted
 # Verlet ragdoll over the mannequin's Skeleton3D — ported from Mathias's
 # laser-arena/public/ragdoll.js.  Bones become point masses joined by distance
 # constraints; an impulse shaped by death cause launches them; they fall under
-# gravity against the map's AABB colliders.  Cosmetic and client-only.
+# gravity against the map's brush geometry.  Cosmetic and client-only.
 
 const GRAVITY := 20.32
 const DAMP := 0.985
@@ -223,19 +223,19 @@ func _push(bone_name: String, vx: float, vy: float, vz: float) -> void:
 
 # --- simulation ----------------------------------------------------------------
 
-func update(dt: float, colliders: Array[AABB], has_floor: bool = true,
+func update(dt: float, world: CollisionWorld, has_floor: bool = true,
 		kill_y: float = -INF) -> void:
 	if settled or dead:
 		return
 	var remain := minf(dt, 0.1)
 	while remain > 0.0001:
 		var step_dt := minf(remain, MAX_STEP)
-		_step(step_dt, colliders, has_floor, kill_y)
+		_step(step_dt, world, has_floor, kill_y)
 		remain -= step_dt
 	_apply()
 
 
-func _step(dt: float, colliders: Array[AABB], has_floor: bool,
+func _step(dt: float, world: CollisionWorld, has_floor: bool,
 		kill_y: float) -> void:
 	var moved := 0.0
 	for bone_name: String in BONE_NAMES:
@@ -254,7 +254,7 @@ func _step(dt: float, colliders: Array[AABB], has_floor: bool,
 
 	for _it in ITERATIONS:
 		_solve_constraints()
-		_collide(colliders, has_floor, kill_y)
+		_collide(world, has_floor, kill_y)
 
 	calm = calm + dt if moved / (BONE_NAMES.size() * dt) < SETTLE_SPEED else 0.0
 	if calm > SETTLE_TIME:
@@ -286,7 +286,7 @@ func _solve_constraints() -> void:
 		pb["pos"] = b_pos - offset
 
 
-func _collide(colliders: Array[AABB], has_floor: bool, kill_y: float) -> void:
+func _collide(world: CollisionWorld, has_floor: bool, kill_y: float) -> void:
 	for bone_name: String in BONE_NAMES:
 		var p: Dictionary = parts[bone_name]
 		var pos: Vector3 = p["pos"]
@@ -297,11 +297,15 @@ func _collide(colliders: Array[AABB], has_floor: bool, kill_y: float) -> void:
 			pos.y = r
 			p["grounded"] = true
 
-		for box: AABB in colliders:
-			var result := _collide_aabb(pos, r, box)
-			if result.x != 0.0 or result.y != 0.0 or result.z != 0.0:
-				pos += result
-				if result.y > 0.001:
+		if world != null:
+			# The bone is pushed out as a cube of its own radius rather than a
+			# sphere. A cube is what the brush world resolves exactly, and it is
+			# what lets a body settle on a ramp face instead of on the flat top
+			# of the ramp's bounding box.
+			var push := world.depenetrate(pos, Vector3(r, r, r))
+			if push != Vector3.ZERO:
+				pos += push
+				if push.y > 0.001:
 					p["grounded"] = true
 
 		if kill_y > -1e8 and pos.y < kill_y:
@@ -310,49 +314,6 @@ func _collide(colliders: Array[AABB], has_floor: bool, kill_y: float) -> void:
 		p["pos"] = pos
 
 
-static func _collide_aabb(pos: Vector3, r: float, box: AABB) -> Vector3:
-	var bmin := box.position
-	var bmax := box.end
-
-	if pos.y + r < bmin.y or pos.y - r > bmax.y:
-		return Vector3.ZERO
-
-	var ex_min_x := bmin.x - r
-	var ex_max_x := bmax.x + r
-	var ex_min_z := bmin.z - r
-	var ex_max_z := bmax.z + r
-
-	if pos.x < ex_min_x or pos.x > ex_max_x:
-		return Vector3.ZERO
-	if pos.z < ex_min_z or pos.z > ex_max_z:
-		return Vector3.ZERO
-
-	# Six-face smallest-penetration push-out.
-	var dxl := pos.x - ex_min_x
-	var dxr := ex_max_x - pos.x
-	var dzl := pos.z - ex_min_z
-	var dzr := ex_max_z - pos.z
-	var dyd := pos.y + r - bmin.y
-	var dyu := bmax.y + r - pos.y
-
-	var m := minf(dxl, minf(dxr, minf(dzl, minf(dzr, minf(dyd, dyu)))))
-
-	if m == dyu:
-		return Vector3(0.0, bmax.y + r - pos.y, 0.0)
-	if m == dyd:
-		return Vector3(0.0, bmin.y - r - pos.y, 0.0)
-	if m == dxl:
-		return Vector3(ex_min_x - pos.x, 0.0, 0.0)
-	if m == dxr:
-		return Vector3(ex_max_x - pos.x, 0.0, 0.0)
-	if m == dzl:
-		return Vector3(0.0, 0.0, ex_min_z - pos.z)
-	return Vector3(0.0, 0.0, ex_max_z - pos.z)
-
-
-# --- skeleton write-back -------------------------------------------------------
-# World positions written as global pose overrides; rotations point each bone at
-# its child, matching the JS apply().
 
 func _apply() -> void:
 	var skel_inv := _skeleton.global_transform.affine_inverse()

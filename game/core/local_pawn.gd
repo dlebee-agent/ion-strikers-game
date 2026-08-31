@@ -26,7 +26,6 @@ var _tp_gun_instance: Node3D
 var _fp_skeleton: Skeleton3D
 var _tp_skeleton: Skeleton3D
 var _fp_anim_player: AnimationPlayer
-var _colliders: Array[AABB] = []
 var _world: CollisionWorld = null
 var team_color: String = "blue"
 # Bumped to abandon a queued return-to-idle, standing in for clearTimeout().
@@ -85,8 +84,7 @@ const FP_BLEND_CHANNEL := 0.15
 func _init() -> void:
 	movement = Movement.new()
 
-func setup(colliders: Array[AABB], world: CollisionWorld) -> void:
-	_colliders = colliders
+func setup(world: CollisionWorld) -> void:
 	_world = world
 	movement.position = Vector3.ZERO
 	movement.velocity = Vector3.ZERO

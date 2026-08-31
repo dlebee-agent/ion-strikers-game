@@ -53,7 +53,8 @@ var _death_start_pos := Vector3.ZERO
 var _death_can_leave := false
 
 var _death_ragdoll: Ragdoll
-var _death_colliders: Array[AABB] = []
+var _death_world: CollisionWorld = null
+var _death_probe := TraceResult.new()
 var _death_killer_pos: Variant = null  # Vector3 or null
 var _death_look := Vector3.ZERO
 var _death_look_t := 0.0
@@ -114,14 +115,14 @@ func start_death(body_pos: Vector3, eye_pos: Vector3) -> void:
 
 
 func start_death_ragdoll(body_pos: Vector3, eye_pos: Vector3,
-		rag: Ragdoll, colliders: Array[AABB], killer_pos: Variant) -> void:
+		rag: Ragdoll, world: CollisionWorld, killer_pos: Variant) -> void:
 	follow_state = FollowState.DEATH_SETTLE
 	_death_settle_t = 0.0
 	_death_body_pos = body_pos
 	_death_start_pos = eye_pos
 	_death_can_leave = false
 	_death_ragdoll = rag
-	_death_colliders = colliders
+	_death_world = world
 	_death_killer_pos = killer_pos
 	_death_look = Vector3.ZERO
 	_death_look_t = 0.0
@@ -496,36 +497,16 @@ func _pick_death_look(hp: Vector3, killer_pos: Variant) -> Vector3:
 
 
 func _ray_clearance(origin: Vector3, dir: Vector3, want: float) -> float:
-	var best := want
-	for box: AABB in _death_colliders:
-		var t := _ray_aabb_local(origin, dir, box)
-		if t > 0.0 and t < best + DEATH_SKIM:
-			best = minf(best, maxf(0.0, t - DEATH_SKIM))
-	return best
+	if _death_world == null:
+		return want
+	# Against brushes, so the death camera can sit over a ramp instead of being
+	# shoved back by the empty air inside the ramp's bounding box.
+	var hit := _death_world.ray_distance(origin, dir.normalized(), want + DEATH_SKIM, _death_probe)
+	if hit >= want + DEATH_SKIM:
+		return want
+	return minf(want, maxf(0.0, hit - DEATH_SKIM))
 
 
-func _ray_aabb_local(origin: Vector3, dir: Vector3, box: AABB) -> float:
-	var tmin := -1e20
-	var tmax := 1e20
-	for i in 3:
-		if absf(dir[i]) < 1e-8:
-			if origin[i] < box.position[i] or origin[i] > box.end[i]:
-				return INF
-		else:
-			var t1 := (box.position[i] - origin[i]) / dir[i]
-			var t2 := (box.end[i] - origin[i]) / dir[i]
-			if t1 > t2:
-				var tmp := t1
-				t1 = t2
-				t2 = tmp
-			tmin = maxf(tmin, t1)
-			tmax = minf(tmax, t2)
-			if tmin > tmax:
-				return INF
-	return tmin if tmin > 0.0 else INF
-
-
-# ── Teammate follow ─────────────────────────────────────────────────────
 
 func _update_teammate_follow(dt: float, remotes: Dictionary, my_team: int) -> void:
 	var mates := _get_living(remotes, my_team)

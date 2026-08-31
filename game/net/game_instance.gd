@@ -25,7 +25,6 @@ var participants: Dictionary = {}   # id → Participant
 var pawns: Dictionary = {}          # id → ServerPawn
 var bot_director: BotDirector
 var spawns: Dictionary = {}
-var colliders: Array[AABB] = []
 var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
@@ -93,7 +92,7 @@ func setup_map() -> void:
 		_setup_community_map()
 	else:
 		_setup_builtin_map()
-	bot_director.configure(colliders, arena_size, spawns)
+	bot_director.configure(world, arena_size, spawns)
 
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
 
@@ -101,7 +100,6 @@ func setup_map() -> void:
 func _setup_builtin_map() -> void:
 	var map_def: Dictionary = ParkourMap.definition()
 	var compiled := MapEngine.compile(map_def)
-	colliders = MapBuilder.build_colliders(compiled)
 	world = MapBuilder.build_world(compiled)
 	MapBuilder.build_physics(self, compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
@@ -117,7 +115,6 @@ func _setup_community_map() -> void:
 		return
 	for w: String in level.warnings:
 		print("[server] %s: %s" % [map_id, w])
-	colliders = level.colliders
 	world = level.world
 	spawns = level.spawns
 	arena_size = level.arena
