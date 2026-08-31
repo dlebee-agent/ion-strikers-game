@@ -118,6 +118,34 @@ command -v curl >/dev/null 2>&1 || die "curl not found on PATH"
 GODOT="$(find_godot)" || die "godot not found (set GODOT or install Godot on PATH)"
 
 mkdir -p "$ROOT/.dev"
+
+# After a git pull the .godot import cache and global class list can be stale.
+# Open the editor once and quit so pulled files are imported before we launch.
+stamp="$ROOT/.dev/godot-import-head"
+head=""
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	head="$(git -C "$ROOT" rev-parse HEAD)"
+fi
+refresh=1
+if [ "${SKIP_EDITOR_REFRESH:-}" = "1" ]; then
+	refresh=0
+elif [ -n "$head" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$head" ]; then
+	refresh=0
+fi
+if [ "${FORCE_EDITOR_REFRESH:-}" = "1" ]; then
+	refresh=1
+fi
+if [ "$refresh" -eq 1 ]; then
+	log "refreshing Godot project (editor --quit)..."
+	"$GODOT" --path "$ROOT/game" --editor --quit \
+		> >(awk '{ print "[import] " $0; fflush() }') 2>&1 \
+		|| die "Godot editor refresh failed"
+	if [ -n "$head" ]; then
+		printf '%s\n' "$head" > "$stamp"
+	fi
+	log "Godot project is up to date"
+fi
+
 log "building Game API..."
 ( cd "$ROOT/api" && go build -o "$ROOT/.dev/gameapi" ./cmd/gameapi )
 

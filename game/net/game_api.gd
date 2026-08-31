@@ -5,7 +5,9 @@ extends Node
 ## on the gameplay path — after this returns host/port/token, the caller
 ## opens ENet and sends JoinAuth.
 
-var api_url: String = "http://127.0.0.1:8080"
+const DEFAULT_API_URL := "https://api.ionstrikers.com"
+
+var api_url: String = DEFAULT_API_URL
 
 const _TIMEOUT_S := 8.0
 
@@ -31,9 +33,7 @@ func _read_api_url() -> String:
 	for i in args.size():
 		if args[i] == "--api-url" and i + 1 < args.size():
 			return args[i + 1].rstrip("/")
-	if DevMode.active:
-		return "http://127.0.0.1:8080"
-	return "https://game.ionstrikers.com"
+	return DEFAULT_API_URL
 
 
 func _http(method: int, path: String, payload: Variant = null) -> Dictionary:
