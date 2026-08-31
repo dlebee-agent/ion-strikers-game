@@ -66,6 +66,70 @@ class Face extends RefCounted:
 	func degenerate() -> bool:
 		return (p0 - p1).cross(p2 - p1).length() < 0.000001
 
+	# The directions this face lays its texture along, in Godot space, as
+	# [u, v]. Valve 220 states them outright. The older format does not, so they
+	# are derived the way Quake's compiler does it: take whichever of six axis
+	# aligned pairs the face most nearly faces, then spin that pair by the
+	# face's rotation. That derivation is why the old format shears a texture
+	# across a slanted face and Valve 220 does not.
+	func uv_axes() -> Array:
+		if valve:
+			return [u_axis, v_axis]
+
+		# Quake's table is in Quake space, so the normal goes back there first.
+		var n := plane().normal
+		var qn := Vector3(n.x, -n.z, n.y)
+
+		var bases := [
+			[Vector3(0, 0, 1), Vector3(1, 0, 0), Vector3(0, -1, 0)],
+			[Vector3(0, 0, -1), Vector3(1, 0, 0), Vector3(0, -1, 0)],
+			[Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)],
+			[Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)],
+			[Vector3(0, 1, 0), Vector3(1, 0, 0), Vector3(0, 0, -1)],
+			[Vector3(0, -1, 0), Vector3(1, 0, 0), Vector3(0, 0, -1)],
+		]
+		var best := -2.0
+		var pick := 0
+		for i in bases.size():
+			var d: float = qn.dot(bases[i][0])
+			if d > best:
+				best = d
+				pick = i
+		var qu: Vector3 = bases[pick][1]
+		var qv: Vector3 = bases[pick][2]
+
+		if rotation != 0.0:
+			var ang := deg_to_rad(rotation)
+			var sn := sin(ang)
+			var cs := cos(ang)
+			# Both axes spin within the same two components: the one the U axis
+			# occupies and the one the V axis occupies. For an axis aligned pair
+			# that is always exactly two of the three. Assigned back explicitly
+			# rather than through a loop, because Vector3 is a value type and a
+			# loop variable would be a copy.
+			var su := 0 if qu.x != 0.0 else (1 if qu.y != 0.0 else 2)
+			var sv := 0 if qv.x != 0.0 else (1 if qv.y != 0.0 else 2)
+			var u_a := qu[su]
+			var u_b := qu[sv]
+			qu[su] = cs * u_a - sn * u_b
+			qu[sv] = sn * u_a + cs * u_b
+			var v_a := qv[su]
+			var v_b := qv[sv]
+			qv[su] = cs * v_a - sn * v_b
+			qv[sv] = sn * v_a + cs * v_b
+
+		return [TbMap.dir_to_godot(qu), TbMap.dir_to_godot(qv)]
+
+	# Texture coordinate for a vertex, given the texture's pixel size. The dot
+	# products are in map units, so the vertex is scaled back out of metres
+	# first: the offsets and scales in the file are all in those units.
+	func uv_for(vertex: Vector3, texture_size: Vector2) -> Vector2:
+		var axes := uv_axes()
+		var in_units := vertex / TbMap.UNIT_SCALE
+		var u: float = in_units.dot(axes[0]) / u_scale + u_offset
+		var v: float = in_units.dot(axes[1]) / v_scale + v_offset
+		return Vector2(u / maxf(texture_size.x, 1.0), v / maxf(texture_size.y, 1.0))
+
 
 class Brush extends RefCounted:
 	var faces: Array[Face] = []
