@@ -11,6 +11,10 @@ config_version=5
 [application]
 
 config/name="Ion Strikers"
+; Source of truth for the release version. The exporters fall back to this for
+; bundle metadata, and the release workflow refuses a tag that disagrees with it.
+; Digits and dots only — pre-release suffixes live in BuildInfo.BUILD.
+config/version="0.0.1"
 run/main_scene="res://scenes/boot/boot.tscn"
 ; Release templates leave stdout block-buffered, which hides dedicated-server
 ; logs from journald/docker until the process exits. Debug builds already do this.

@@ -83,6 +83,7 @@ func _start_server(args: PackedStringArray) -> void:
 		registrar.allow_dynamic_create = allow_dynamic_create
 		registrar.max_peers = 2048
 		registrar.max_lobbies = max_lobbies
+		registrar.build_version = BuildInfo.version()
 		registrar.protocol_version = Protocol.PROTOCOL_VERSION
 		registrar.dev_mode = DevMode.active
 		registrar.configure(server_node.get_registry())

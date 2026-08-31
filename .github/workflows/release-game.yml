@@ -28,19 +28,24 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # Linux + Windows. Godot exports both from the same Linux runner, so one
-  # engine + template download covers four artifacts.
+  # Cheap gate. Runs first so a version typo fails in seconds instead of after
+  # a four-minute macOS export and notarization round trip.
   # -------------------------------------------------------------------------
-  build-desktop:
-    name: Export Linux + Windows
+  validate:
+    name: Validate tag
     runs-on: ubuntu-latest
+
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      core: ${{ steps.check.outputs.core }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve version
-        id: version
+      - name: Check the tag against project.godot
+        id: check
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -48,15 +53,31 @@ jobs:
           else
             TAG="${GITHUB_REF#refs/tags/}"
           fi
-          # Strip the namespace so artifact names carry only the version.
-          VERSION="${TAG#game/}"
-          if [ "$VERSION" = "$TAG" ] || [ -z "$VERSION" ]; then
-            echo "expected a game/<version> tag, got '${TAG}'" >&2
-            exit 1
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # Capture into a variable first so a rejected tag fails the step here,
+          # rather than `read` quietly seeing an empty stream.
+          PARTS="$(tools/release/check-version.sh "$TAG")"
+          read -r TAG VERSION CORE <<< "$PARTS"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "resolved ${TAG} -> ${VERSION}"
+          echo "core=${CORE}"       >> "$GITHUB_OUTPUT"
+          echo "${TAG} -> version ${VERSION}, core ${CORE}" >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------------
+  # Linux + Windows. Godot exports both from the same Linux runner, so one
+  # engine + template download covers four artifacts.
+  # -------------------------------------------------------------------------
+  build-desktop:
+    name: Export Linux + Windows
+    runs-on: ubuntu-latest
+    needs: [validate]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stamp build info
+        run: tools/release/stamp-build-info.sh "${{ needs.validate.outputs.version }}"
 
       - name: Install Godot ${{ env.GODOT_VERSION }} and export templates
         run: |
@@ -96,7 +117,7 @@ jobs:
       - name: Export
         id: export
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           STAGE="$RUNNER_TEMP/stage"
@@ -166,6 +187,7 @@ jobs:
   build-macos:
     name: Export macOS
     runs-on: macos-latest
+    needs: [validate]
 
     env:
       # Lifted into env so `if:` expressions can test for their presence.
@@ -180,25 +202,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve version
-        id: version
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          # Strip the namespace so artifact names carry only the version.
-          VERSION="${TAG#game/}"
-          if [ "$VERSION" = "$TAG" ] || [ -z "$VERSION" ]; then
-            echo "expected a game/<version> tag, got '${TAG}'" >&2
-            exit 1
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "semver=${VERSION#v}" >> "$GITHUB_OUTPUT"
-          echo "resolved ${TAG} -> ${VERSION}"
+      - name: Stamp build info
+        run: tools/release/stamp-build-info.sh "${{ needs.validate.outputs.version }}"
 
       - name: Install Godot ${{ env.GODOT_VERSION }} and export templates
         run: |
@@ -225,25 +230,6 @@ jobs:
           mv "$RUNNER_TEMP/tpz/templates"/* "$TEMPLATE_DIR/"
 
           godot --version
-
-      - name: Stamp bundle version from tag
-        env:
-          SEMVER: ${{ steps.version.outputs.semver }}
-        run: |
-          set -euo pipefail
-          # CFBundleVersion / CFBundleShortVersionString must be dotted numbers,
-          # so a tag like v0.1.0-rc1 keeps the committed placeholder instead of
-          # failing the export.
-          if printf '%s' "$SEMVER" | grep -Eq '^[0-9]+(\.[0-9]+){0,3}$'; then
-            sed -i '' \
-              -e "s|^application/short_version=.*|application/short_version=\"${SEMVER}\"|" \
-              -e "s|^application/version=.*|application/version=\"${SEMVER}\"|" \
-              game/export_presets.cfg
-            echo "stamped ${SEMVER}"
-          else
-            echo "tag '${SEMVER}' is not a dotted version, leaving presets alone"
-          fi
-          grep -n 'application/\(short_\)\?version' game/export_presets.cfg
 
       - name: Import project
         run: |
@@ -377,7 +363,7 @@ jobs:
       - name: Build DMG for the client
         id: dmg
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -421,7 +407,7 @@ jobs:
 
       - name: Package the server
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -454,7 +440,7 @@ jobs:
   # -------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [build-desktop, build-macos]
+    needs: [validate, build-desktop, build-macos]
     runs-on: ubuntu-latest
 
     steps:
@@ -472,26 +458,14 @@ jobs:
           sha256sum * > checksums.txt
           cat checksums.txt
 
-      - name: Resolve tag
-        id: tag
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          # The release attaches to the real tag; only its title drops the prefix.
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#game/}" >> "$GITHUB_OUTPUT"
-
+      # The release attaches to the real tag; only its title drops the prefix.
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: Game ${{ steps.tag.outputs.version }}
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: Game ${{ needs.validate.outputs.version }}
           draft: false
-          prerelease: false
+          prerelease: ${{ needs.validate.outputs.version != needs.validate.outputs.core }}
           generate_release_notes: true
           files: |
             dist/*.tar.gz

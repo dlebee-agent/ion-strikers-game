@@ -274,7 +274,7 @@ func _process(_dt: float) -> void:
 
 func _register_builtins() -> void:
 	register_command("clear", _cmd_clear, "Wipe the log view")
-	register_command("version", _cmd_version, "Game name + Godot version")
+	register_command("version", _cmd_version, "Game version + Godot version")
 	register_command("server_password", _cmd_server_password, "Set admin password for this session")
 	register_command("server_enable_cheats", _cmd_server_enable_cheats, "Toggle cheats on the server")
 	register_command("client_show_hitboxes", _cmd_client_show_hitboxes, "Show hitbox debug draw")
@@ -286,8 +286,9 @@ func _cmd_clear(_args: PackedStringArray) -> void:
 
 func _cmd_version(_args: PackedStringArray) -> void:
 	var name_str: String = ProjectSettings.get_setting("application/config/name", "Ion Strikers")
-	var ver := Engine.get_version_info()
-	log_line("%s — Godot %s.%s.%s %s" % [name_str, ver["major"], ver["minor"], ver["patch"], ver["status"]])
+	log_line("%s %s" % [name_str, BuildInfo.version()])
+	log_line("Godot %s" % BuildInfo.godot_version(), COLOR_MUTE)
+	log_line("protocol %d" % Protocol.PROTOCOL_VERSION, COLOR_MUTE)
 
 
 func _cmd_server_password(args: PackedStringArray) -> void:
