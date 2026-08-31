@@ -712,7 +712,7 @@ func set_special(armed: bool, charging: bool = false, charge: float = 0.0,
 		_spec_glow_t = 0.2
 	_apply_special_visuals()
 	_set_ready_pulse(armed and not charging)
-	set_process(_wants_hud_process())
+	set_process(_wants_special_anim())
 
 
 func show_meteor_warning(show: bool) -> void:
@@ -753,8 +753,7 @@ func add_chat_message(name_text: String, text: String, team: int, team_only: boo
 
 	_chat_log.add_child(row)
 	if not _match_over_active:
-		row.set_meta("expires_at", Time.get_ticks_msec() + int(CHAT_TTL * 1000.0))
-		set_process(true)
+		_arm_chat_ttl(row)
 	_trim_chat_log()
 
 
@@ -912,26 +911,23 @@ func _trim_chat_log() -> void:
 		_drop_chat_row(_chat_log.get_child(0))
 
 
-func _expire_old_chat() -> void:
-	if _match_over_active or not _chat_log:
+func _arm_chat_ttl(row: Node) -> void:
+	var ttl := Timer.new()
+	ttl.one_shot = true
+	ttl.wait_time = CHAT_TTL
+	# Bound to the Timer, not the row. If the row is trimmed, this child dies
+	# with it and timeout never runs.
+	ttl.timeout.connect(_on_chat_ttl_timeout.bind(ttl))
+	row.add_child(ttl)
+	ttl.start()
+
+
+func _on_chat_ttl_timeout(ttl: Timer) -> void:
+	if _match_over_active or not is_instance_valid(ttl):
 		return
-	var now := Time.get_ticks_msec()
-	var i := 0
-	while i < _chat_log.get_child_count():
-		var row := _chat_log.get_child(i)
-		if row.has_meta("expires_at") and now >= int(row.get_meta("expires_at")):
-			_drop_chat_row(row)
-		else:
-			i += 1
-
-
-func _chat_needs_expiry() -> bool:
-	if _match_over_active or _chat_log == null:
-		return false
-	for row in _chat_log.get_children():
-		if row.has_meta("expires_at"):
-			return true
-	return false
+	var row := ttl.get_parent()
+	if row:
+		_drop_chat_row(row)
 
 
 func _drop_chat_row(row: Node) -> void:
@@ -1023,8 +1019,7 @@ func _process(dt: float) -> void:
 			dirty = true
 	if dirty:
 		_apply_special_visuals()
-	_expire_old_chat()
-	if not _wants_hud_process():
+	if not _wants_special_anim():
 		set_process(false)
 
 
@@ -1114,10 +1109,6 @@ func _apply_special_visuals() -> void:
 			st.border_color = PIP_EMPTY_BORDER
 			st.shadow_color = Color(0, 0, 0, 0)
 			st.shadow_size = 0
-
-
-func _wants_hud_process() -> bool:
-	return _wants_special_anim() or _chat_needs_expiry()
 
 
 func _wants_special_anim() -> bool:
