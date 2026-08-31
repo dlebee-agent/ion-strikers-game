@@ -476,6 +476,10 @@ func _on_snap(snap: Dictionary) -> void:
 	_win_rounds = int(snap.get("win_rounds", _win_rounds))
 	_mode = snap_mode
 	_last_kill_target = snap_kill_target
+	if _match_over:
+		score_blue = maxi(score_blue, _last_score_blue)
+		score_red = maxi(score_red, _last_score_red)
+	var scores_changed := score_blue != _last_score_blue or score_red != _last_score_red
 	_last_score_blue = score_blue
 	_last_score_red = score_red
 	_last_round_num = round_num
@@ -494,7 +498,7 @@ func _on_snap(snap: Dictionary) -> void:
 	_hud.update_score(score_blue, score_red, round_num, snap_mode, snap_kill_target,
 		round_state, _win_rounds, blue_alive, red_alive, _clock_text())
 
-	if round_state == Protocol.RS_OVER and not _match_over:
+	if round_state == Protocol.RS_OVER and (not _match_over or scores_changed):
 		var winner := Protocol.TEAM_BLUE if score_blue >= score_red else Protocol.TEAM_RED
 		if score_blue == score_red:
 			winner = 0
@@ -654,6 +658,11 @@ func _on_round_end(msg: Dictionary) -> void:
 
 func _on_match_over(msg: Dictionary) -> void:
 	var winner := int(msg.get("winner", 0))
+	if msg.has("score_blue"):
+		_last_score_blue = int(msg.get("score_blue", _last_score_blue))
+	if msg.has("score_red"):
+		_last_score_red = int(msg.get("score_red", _last_score_red))
+	_apply_match_over_stats(msg.get("stats", []))
 	_enter_match_over(winner)
 	if not _hud.is_round_end_visible():
 		_hud.show_round_end(winner, _last_score_blue, _last_score_red, 0, true)
@@ -783,6 +792,40 @@ func _special_key_label() -> String:
 	if key.is_empty() and slots.size() > 1:
 		key = str(slots[1])
 	return key if not key.is_empty() else "F"
+
+
+func _apply_match_over_stats(stats: Array) -> void:
+	if stats.is_empty():
+		return
+	var by_id: Dictionary = {}
+	var blue_kills := 0
+	var red_kills := 0
+	for s in stats:
+		if typeof(s) != TYPE_DICTIONARY:
+			continue
+		var entry: Dictionary = s
+		var pid := int(entry.get("id", 0))
+		by_id[pid] = entry
+		var name := str(entry.get("name", ""))
+		if pid != 0 and not name.is_empty():
+			_player_names[pid] = name
+		match int(entry.get("team", 0)):
+			Protocol.TEAM_BLUE:
+				blue_kills += int(entry.get("kills", 0))
+			Protocol.TEAM_RED:
+				red_kills += int(entry.get("kills", 0))
+	if _mode == "dm":
+		_last_score_blue = maxi(_last_score_blue, blue_kills)
+		_last_score_red = maxi(_last_score_red, red_kills)
+	for p in _last_snap_players:
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		var pid := int(p.get("id", 0))
+		if not by_id.has(pid):
+			continue
+		var s: Dictionary = by_id[pid]
+		p["kills"] = int(s.get("kills", 0))
+		p["deaths"] = int(s.get("deaths", 0))
 
 
 func _update_scoreboard() -> void:

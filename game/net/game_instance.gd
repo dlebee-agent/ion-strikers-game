@@ -545,7 +545,8 @@ func _broadcast_match_over(winner: int) -> void:
 			"kills": p.kills, "deaths": p.deaths, "is_bot": p.is_bot,
 		})
 	event_broadcast.emit(Protocol.CH_EVENTS,
-		Protocol.encode_match_over(winner, stats), -1)
+		Protocol.encode_match_over(
+			winner, match_state.score_blue, match_state.score_red, stats), -1)
 
 
 func _tick_specials(_dt: float) -> void:

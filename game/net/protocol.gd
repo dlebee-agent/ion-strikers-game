@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 3
+const PROTOCOL_VERSION := 4
 
 const MODE_CLASSIC := 0
 const MODE_DM := 1
@@ -292,6 +292,8 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["round_num"] = b.get_u16()
 		Msg.MATCH_OVER:
 			d["winner"] = b.get_u8()
+			d["score_blue"] = b.get_u16()
+			d["score_red"] = b.get_u16()
 			var count := b.get_u8()
 			var stats: Array[Dictionary] = []
 			for _i in count:
@@ -632,11 +634,14 @@ static func encode_round_end(
 	return b.data_array
 
 
-static func encode_match_over(winner: int, stats: Array) -> PackedByteArray:
+static func encode_match_over(
+		winner: int, score_blue: int, score_red: int, stats: Array) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.MATCH_OVER)
 	b.put_u8(0)
 	b.put_u8(winner)
+	b.put_u16(score_blue)
+	b.put_u16(score_red)
 	b.put_u8(stats.size())
 	for s: Dictionary in stats:
 		b.put_32(s["id"])
