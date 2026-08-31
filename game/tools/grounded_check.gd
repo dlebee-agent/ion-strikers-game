@@ -60,6 +60,22 @@ func _initialize() -> void:
 	m.on_ground = false
 	_ok("actually airborne still is", driver._resolve_state(m), AnimDriver.State.JUMP)
 
+	m.is_crouching = true
+	m.on_ground = true
+	m.velocity = Vector3.ZERO
+	_ok("grounded crouch is the squat, not idle", driver._resolve_state(m), AnimDriver.State.CROUCH_IDLE)
+	m.on_ground = false
+	_ok("crouch still wins while airborne", driver._resolve_state(m), AnimDriver.State.CROUCH_IDLE)
+	m.on_ground = true
+	m.velocity = Vector3(2.0, 0.0, 0.0)
+	_ok("moving crouch is the walk squat", driver._resolve_state(m), AnimDriver.State.CROUCH_WALK)
+
+	print("-- crouched bit on a snapshot --")
+	players[0]["flags"] = Protocol.PFLG_ALIVE | Protocol.PFLG_GROUNDED | Protocol.PFLG_CROUCHED
+	snap = Protocol.decode(Protocol.encode_snap(0, 0, 1, 0, 0, 10, 3, players))
+	back = (snap["players"] as Array)[0]
+	_ok("crouched set on the wire", (int(back["flags"]) & Protocol.PFLG_CROUCHED) != 0, true)
+
 	print("")
 	print("FAILURES: %d" % _fails)
 	quit(1 if _fails > 0 else 0)

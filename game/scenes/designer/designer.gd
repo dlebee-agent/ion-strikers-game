@@ -42,7 +42,7 @@ const HINT_PREVIEW := "drag to orbit · scroll to zoom · ◀ ▶ steps clips ·
 @onready var clip_row: HBoxContainer = %ClipRow
 
 var pawn: LocalPawn
-var _colliders: Array[AABB] = []
+var _world: CollisionWorld = null
 var _controls_visible := false
 var _current_clip_index := -1
 var _clip_names: PackedStringArray = []
@@ -62,6 +62,8 @@ func _ready() -> void:
 	add_child(_hitbox_debug)
 
 func _build_arena() -> void:
+	_world = CollisionWorld.new()
+
 	# No default sky: otherwise the mannequin picks up chrome reflections.
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -89,7 +91,7 @@ func _build_arena() -> void:
 	floor_mesh.position = Vector3.ZERO
 	add_child(floor_mesh)
 
-	_colliders.append(AABB(Vector3(-arena_size, -2.0, -arena_size), Vector3(arena_size * 2, 2.0, arena_size * 2)))
+	_add_solid(AABB(Vector3(-arena_size, -2.0, -arena_size), Vector3(arena_size * 2, 2.0, arena_size * 2)))
 
 	var walls := [
 		[Vector3(0, wall_height / 2.0, -arena_size), Vector3(arena_size * 2, wall_height, wall_thick)],
@@ -101,13 +103,13 @@ func _build_arena() -> void:
 		var pos: Vector3 = wall_data[0]
 		var sz: Vector3 = wall_data[1]
 		_add_box(pos, sz, Color(0.12, 0.13, 0.18))
-		_colliders.append(AABB(pos - sz * 0.5, sz))
+		_add_solid(AABB(pos - sz * 0.5, sz))
 
 	var crate_color := Color(0.15, 0.12, 0.2)
 	_add_box(Vector3(4, 0.75, -3), Vector3(1.5, 1.5, 1.5), crate_color)
-	_colliders.append(AABB(Vector3(3.25, 0, -3.75), Vector3(1.5, 1.5, 1.5)))
+	_add_solid(AABB(Vector3(3.25, 0, -3.75), Vector3(1.5, 1.5, 1.5)))
 	_add_box(Vector3(-5, 1.0, 5), Vector3(2.0, 2.0, 1.0), crate_color)
-	_colliders.append(AABB(Vector3(-6.0, 0, 4.5), Vector3(2.0, 2.0, 1.0)))
+	_add_solid(AABB(Vector3(-6.0, 0, 4.5), Vector3(2.0, 2.0, 1.0)))
 
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-45, -30, 0)
@@ -124,6 +126,12 @@ func _build_arena() -> void:
 	add_child(fill)
 
 	_draw_grid(arena_size)
+	_world.build()
+
+func _add_solid(box: AABB) -> void:
+	var index := _world.add_box(box)
+	if Hitbox.special_blocks(box):
+		_world.tag_brush(index, CollisionWorld.CONTENT_SPECIAL)
 
 func _add_box(pos: Vector3, sz: Vector3, color: Color) -> void:
 	var mi := MeshInstance3D.new()
@@ -166,7 +174,7 @@ func _draw_grid(arena_size: float) -> void:
 func _setup_pawn() -> void:
 	pawn = LocalPawn.new()
 	add_child(pawn)
-	pawn.setup(_colliders)
+	pawn.setup(_world)
 	pawn.movement.position = Vector3(0, 0.1, 0)
 	pawn.weapon.special_armed = true
 

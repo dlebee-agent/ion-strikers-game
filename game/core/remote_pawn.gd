@@ -262,7 +262,8 @@ func _apply_pose(pose: Dictionary) -> void:
 		_movement.position = pos
 		_movement.yaw = yaw_val
 		_movement.pitch = pose.get("pitch", 0.0)
-		_movement.is_crouching = pose.get("crouched", false)
+		_movement.is_crouching = bool(pose.get("crouched", false))
+		_movement.crouch_fraction = 1.0 if _movement.is_crouching else 0.0
 		_movement.velocity = Vector3(
 			float(pose.get("vx", 0.0)),
 			float(pose.get("vy", 0.0)),

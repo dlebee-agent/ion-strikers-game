@@ -170,12 +170,13 @@ func _resolve_clip_name(clip_name: String) -> String:
 	return ""
 
 func _resolve_state(movement: Movement) -> State:
-	if not movement.on_ground:
-		return State.JUMP
-
 	var speed := Vector2(movement.velocity.x, movement.velocity.z).length()
+	# A ducked body should read as ducked even mid-hop. Jump used to win that
+	# comparison, so a crouch-jump (or a false not-grounded) never played squat.
 	if movement.is_crouching:
 		return State.CROUCH_WALK if speed > 0.5 else State.CROUCH_IDLE
+	if not movement.on_ground:
+		return State.JUMP
 
 	if speed > Movement.RUN_SPEED * 0.7:
 		return State.RUN
