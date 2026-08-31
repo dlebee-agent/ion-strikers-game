@@ -18,6 +18,9 @@ const JUMP_VEL := 301.993377 * UNIT_SCALE
 const PLAYER_RADIUS := 0.4
 const STEP_HEIGHT := 0.6
 const STEP_LIP := 0.35
+# Feet are parked this far above whatever they rest on, so contact is never a
+# floating-point coin toss between touching and penetrating.
+const GROUND_SKIN := 0.001
 const EYE_STAND := 1.6
 const EYE_CROUCH := 0.9
 const STAND_HEIGHT := 1.79
@@ -92,7 +95,10 @@ func update(dt: float, wish_forward: float, wish_side: float, want_jump: bool,
 
 	var step_delta := position.y - old_y
 	if on_ground and absf(step_delta) > 0.01 and absf(step_delta) < STEP_VIEW_MAX:
-		_step_view_offset -= step_delta
+		# Clamped, or a staircase taken faster than the eye catches up stacks step
+		# on step until the view is looking out of the player's knees.
+		_step_view_offset = clampf(_step_view_offset - step_delta,
+			-STEP_VIEW_MAX, STEP_VIEW_MAX)
 
 	if absf(_step_view_offset) > 0.001:
 		var recover := STEP_VIEW_SPEED * dt
@@ -159,19 +165,36 @@ func _move_and_collide(dt: float, colliders: Array[AABB]) -> void:
 				if velocity.y > 0.0:
 					velocity.y = 0.0
 
-	if not grounded and on_ground:
-		# step-down: snap to ground if very close
-		var test_pos := new_pos + Vector3(0, -STEP_LIP, 0)
-		for box in colliders:
-			var ov := _aabb_vs_capsule(box, test_pos, r, h)
-			if ov.y > 0.001:
-				new_pos = test_pos + ov
-				grounded = true
-				velocity.y = 0.0
-				break
+	# A player resting exactly on a surface penetrates nothing, so standing on
+	# ground cannot be read off the push-out above; it has to be probed for. The
+	# same probe walks the player down onto the next tread. It has to settle on the
+	# HIGHEST surface in reach: on a staircase the treads overlap, so taking the
+	# first one found alternates between two steps and vibrates the view.
+	if on_ground and velocity.y <= 0.0:
+		var support := _highest_support(new_pos, r, colliders)
+		if support > -INF:
+			new_pos.y = support + GROUND_SKIN
+			grounded = true
+			velocity.y = 0.0
 
 	on_ground = grounded
 	position = new_pos
+
+# Top of the tallest box the player's footprint is over that sits within a step's
+# reach below their feet, or -INF when there is nothing to stand on.
+func _highest_support(pos: Vector3, radius: float, colliders: Array[AABB]) -> float:
+	var best := -INF
+	var lowest := pos.y - STEP_LIP
+	for box in colliders:
+		var top := box.end.y
+		if top < lowest or top > pos.y + GROUND_SKIN or top <= best:
+			continue
+		if pos.x <= box.position.x - radius or pos.x >= box.end.x + radius:
+			continue
+		if pos.z <= box.position.z - radius or pos.z >= box.end.z + radius:
+			continue
+		best = top
+	return best
 
 func _aabb_vs_capsule(box: AABB, pos: Vector3, radius: float, height: float) -> Vector3:
 	var foot_y := pos.y
@@ -194,7 +217,7 @@ func _aabb_vs_capsule(box: AABB, pos: Vector3, radius: float, height: float) -> 
 
 	var ledge_height := box.end.y - foot_y
 	if on_ground and ledge_height > 0.0 and ledge_height <= STEP_LIP:
-		return Vector3(0.0, ledge_height + 0.001, 0.0)
+		return Vector3(0.0, ledge_height + GROUND_SKIN, 0.0)
 
 	# A descending player always leaves through the top face, otherwise a deep
 	# overlap on a thick slab would resolve downward and drop them through it.

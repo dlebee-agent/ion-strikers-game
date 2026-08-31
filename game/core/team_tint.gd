@@ -18,13 +18,16 @@ const GUN_BLUE := Color8(24, 160, 255)
 
 const BODY_EMISSION := 0.28
 const GUN_EMISSION := 0.4
-# The original asks for gloss 0.25 with metalness off.
+# Original gloss 0.25 with metalness off. Godot roughness is 1 - gloss.
 const TINT_ROUGHNESS := 0.75
+# Godot still reflects the sky and draws a specular lobe at metallic=0 unless
+# this is pulled down. 0.22 keeps the original's slight sheen without chrome.
+const TINT_SPECULAR := 0.22
 
 static func apply_body(root: Node, team: String) -> void:
 	var body: Color = BODY_RED if team == "red" else BODY_BLUE
 	var joint: Color = JOINT_RED if team == "red" else JOINT_BLUE
-	for mi in _mesh_instances(root):
+	for mi in _mesh_instances(root, true):
 		var mesh := mi.mesh
 		if not mesh:
 			continue
@@ -33,14 +36,14 @@ static func apply_body(root: Node, team: String) -> void:
 			if not mat:
 				continue
 			if mat.resource_name.to_lower().contains("joint"):
-				_paint(mat, joint, 0.0)
+				_paint(mat, joint, 0.0, TINT_ROUGHNESS)
 			else:
-				_paint(mat, body, BODY_EMISSION)
+				_paint(mat, body, BODY_EMISSION, TINT_ROUGHNESS)
 			mi.set_surface_override_material(i, mat)
 
 static func apply_gun(root: Node, team: String) -> void:
 	var glow: Color = GUN_RED if team == "red" else GUN_BLUE
-	for mi in _mesh_instances(root):
+	for mi in _mesh_instances(root, false):
 		var mesh := mi.mesh
 		if not mesh:
 			continue
@@ -50,7 +53,9 @@ static func apply_gun(root: Node, team: String) -> void:
 				continue
 			var mat_name := mat.resource_name.to_lower()
 			if mat_name == "main" or mat_name == "white":
-				_paint(mat, glow, GUN_EMISSION)
+				# Accents keep the authored roughness (0.5); only the colour and
+				# glow change, matching attachGunModel().
+				_paint(mat, glow, GUN_EMISSION, mat.roughness)
 				mi.set_surface_override_material(i, mat)
 
 # glTF surface materials are shared by every instance of the mesh, so tinting one
@@ -64,21 +69,29 @@ static func _clone_surface(mi: MeshInstance3D, mesh: Mesh, surface: int) -> Stan
 		return null
 	return src.duplicate() as StandardMaterial3D
 
-static func _paint(mat: StandardMaterial3D, color: Color, emission: float) -> void:
+static func _paint(mat: StandardMaterial3D, color: Color, emission: float, roughness: float) -> void:
 	mat.albedo_color = color
 	mat.metallic = 0.0
-	mat.roughness = TINT_ROUGHNESS
+	mat.roughness = roughness
+	mat.metallic_specular = TINT_SPECULAR
 	if emission > 0.0:
 		mat.emission_enabled = true
 		mat.emission = color
 		mat.emission_energy_multiplier = emission
+	else:
+		mat.emission_enabled = false
 
-static func _mesh_instances(root: Node) -> Array[MeshInstance3D]:
+static func _mesh_instances(root: Node, skip_attachments: bool = false) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
 	if not root:
 		return out
 	if root is MeshInstance3D:
 		out.append(root as MeshInstance3D)
 	for child in root.get_children():
-		out.append_array(_mesh_instances(child))
+		# The pistol is seated on a BoneAttachment3D. Walking into it would paint
+		# the gun the body colour; the original tints the body before the gun is
+		# attached, then tints the gun on its own.
+		if skip_attachments and child is BoneAttachment3D:
+			continue
+		out.append_array(_mesh_instances(child, skip_attachments))
 	return out

@@ -52,11 +52,21 @@ func _ready() -> void:
 	_set_mode(CameraRig.Mode.FIRST_PERSON)
 
 func _build_arena() -> void:
+	# No default sky: otherwise the mannequin picks up chrome reflections.
+	var env := Environment.new()
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(0.03, 0.04, 0.09)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.10, 0.12, 0.18)
+	env.ambient_light_energy = 1.0
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_DISABLED
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
+	$WorldEnv.environment = env
+
 	var arena_size := 21.0
 	var wall_height := 4.5
 	var wall_thick := 0.5
 
-	# Floor
 	var floor_mesh := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(arena_size * 2, arena_size * 2)
@@ -71,7 +81,6 @@ func _build_arena() -> void:
 
 	_colliders.append(AABB(Vector3(-arena_size, -2.0, -arena_size), Vector3(arena_size * 2, 2.0, arena_size * 2)))
 
-	# Walls (N, S, E, W)
 	var walls := [
 		[Vector3(0, wall_height / 2.0, -arena_size), Vector3(arena_size * 2, wall_height, wall_thick)],
 		[Vector3(0, wall_height / 2.0, arena_size), Vector3(arena_size * 2, wall_height, wall_thick)],
@@ -84,14 +93,12 @@ func _build_arena() -> void:
 		_add_box(pos, sz, Color(0.12, 0.13, 0.18))
 		_colliders.append(AABB(pos - sz * 0.5, sz))
 
-	# Two crates for cover / melee testing
 	var crate_color := Color(0.15, 0.12, 0.2)
 	_add_box(Vector3(4, 0.75, -3), Vector3(1.5, 1.5, 1.5), crate_color)
 	_colliders.append(AABB(Vector3(3.25, 0, -3.75), Vector3(1.5, 1.5, 1.5)))
 	_add_box(Vector3(-5, 1.0, 5), Vector3(2.0, 2.0, 1.0), crate_color)
 	_colliders.append(AABB(Vector3(-6.0, 0, 4.5), Vector3(2.0, 2.0, 1.0)))
 
-	# Lighting
 	var key := DirectionalLight3D.new()
 	key.rotation_degrees = Vector3(-45, -30, 0)
 	key.light_energy = 0.8
@@ -106,7 +113,6 @@ func _build_arena() -> void:
 	fill.omni_range = 30.0
 	add_child(fill)
 
-	# Grid lines on floor
 	_draw_grid(arena_size)
 
 func _add_box(pos: Vector3, sz: Vector3, color: Color) -> void:
@@ -303,19 +309,6 @@ func _unhandled_input(event: InputEvent) -> void:
 func _populate_controls_list() -> void:
 	for child in controls_list.get_children():
 		child.queue_free()
-
-	for pair: Array in InputBinds.BIND_FIXED:
-		var row := HBoxContainer.new()
-		var l := Label.new()
-		l.text = pair[0]
-		l.custom_minimum_size.x = 160
-		l.add_theme_font_size_override("font_size", 13)
-		row.add_child(l)
-		var v := Label.new()
-		v.text = pair[1]
-		v.add_theme_font_size_override("font_size", 13)
-		row.add_child(v)
-		controls_list.add_child(row)
 
 	for group_data: Array in InputBinds.BIND_GROUPS:
 		var actions: Array = group_data[1]

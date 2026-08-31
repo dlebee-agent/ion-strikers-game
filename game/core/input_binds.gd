@@ -10,6 +10,8 @@ const BIND_DEFAULTS: Dictionary = {
 	"jump": ["Space", ""],
 	"crouch": ["C", "Ctrl"],
 	"walk": ["Shift", ""],
+	"fire": ["Mouse1", ""],
+	"melee": ["Mouse2", ""],
 	"special": ["F", ""],
 	"scoreboard": ["Tab", "L"],
 	"controls": ["F1", ""],
@@ -21,7 +23,7 @@ const BIND_DEFAULTS: Dictionary = {
 
 const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
-	["Combat", ["special"]],
+	["Combat", ["fire", "melee", "special"]],
 	["Communication", ["chat_all", "chat_team"]],
 	["Interface", ["team_menu", "scoreboard", "controls", "fullscreen"]],
 ]
@@ -34,6 +36,8 @@ const BIND_LABELS: Dictionary = {
 	"jump": "Jump",
 	"crouch": "Duck / crouch",
 	"walk": "Walk (slow)",
+	"fire": "Fire laser",
+	"melee": "Melee",
 	"special": "Special attack (hold)",
 	"scoreboard": "Scoreboard (hold)",
 	"controls": "Controls card",
@@ -43,10 +47,15 @@ const BIND_LABELS: Dictionary = {
 	"chat_team": "Team chat",
 }
 
-const BIND_FIXED: Array = [
-	["Fire laser", "Mouse1"],
-	["Melee", "Mouse2"],
-]
+const MOUSE_BUTTON_NAMES: Dictionary = {
+	MOUSE_BUTTON_LEFT: "Mouse1",
+	MOUSE_BUTTON_RIGHT: "Mouse2",
+	MOUSE_BUTTON_MIDDLE: "Mouse3",
+	MOUSE_BUTTON_XBUTTON1: "Mouse4",
+	MOUSE_BUTTON_XBUTTON2: "Mouse5",
+	MOUSE_BUTTON_WHEEL_UP: "WheelUp",
+	MOUSE_BUTTON_WHEEL_DOWN: "WheelDown",
+}
 
 var bindings: Dictionary = {}
 var _save_path: String = "user://bindings.cfg"
@@ -84,11 +93,17 @@ func reset_to_defaults() -> void:
 	bindings_changed.emit()
 
 func set_bind(action_name: String, slot: int, key_name: String) -> void:
-	if action_name in bindings and slot >= 0 and slot <= 1:
-		bindings[action_name][slot] = key_name
-		save_bindings()
-		_apply_to_input_map()
-		bindings_changed.emit()
+	if action_name not in bindings or slot < 0 or slot > 1:
+		return
+	if not key_name.is_empty():
+		for other: String in bindings:
+			for i in 2:
+				if bindings[other][i] == key_name:
+					bindings[other][i] = ""
+	bindings[action_name][slot] = key_name
+	save_bindings()
+	_apply_to_input_map()
+	bindings_changed.emit()
 
 func _apply_to_input_map() -> void:
 	for action_name: String in bindings:
@@ -105,6 +120,11 @@ func _apply_to_input_map() -> void:
 				InputMap.action_add_event(im_action, ev)
 
 func _key_name_to_event(key_name: String) -> InputEvent:
+	for button_index: int in MOUSE_BUTTON_NAMES:
+		if MOUSE_BUTTON_NAMES[button_index] == key_name:
+			var mouse_ev := InputEventMouseButton.new()
+			mouse_ev.button_index = button_index
+			return mouse_ev
 	var mapping := {
 		"W": KEY_W, "A": KEY_A, "S": KEY_S, "D": KEY_D,
 		"E": KEY_E, "F": KEY_F, "G": KEY_G, "H": KEY_H,
@@ -125,6 +145,33 @@ func _key_name_to_event(key_name: String) -> InputEvent:
 		ev.physical_keycode = mapping[key_name]
 		return ev
 	return null
+
+func event_to_bind_name(event: InputEvent) -> String:
+	if event is InputEventMouseButton:
+		var button_index: int = (event as InputEventMouseButton).button_index
+		if button_index in MOUSE_BUTTON_NAMES:
+			return MOUSE_BUTTON_NAMES[button_index]
+		return ""
+	if event is InputEventKey:
+		var mapping := {
+			KEY_W: "W", KEY_A: "A", KEY_S: "S", KEY_D: "D",
+			KEY_E: "E", KEY_F: "F", KEY_G: "G", KEY_H: "H",
+			KEY_I: "I", KEY_J: "J", KEY_K: "K", KEY_L: "L",
+			KEY_M: "M", KEY_N: "N", KEY_O: "O", KEY_P: "P",
+			KEY_Q: "Q", KEY_R: "R", KEY_T: "T", KEY_U: "U",
+			KEY_V: "V", KEY_X: "X", KEY_Y: "Y", KEY_Z: "Z",
+			KEY_SPACE: "Space", KEY_SHIFT: "Shift", KEY_CTRL: "Ctrl",
+			KEY_TAB: "Tab", KEY_ENTER: "Enter",
+			KEY_UP: "Up", KEY_DOWN: "Down", KEY_LEFT: "Left", KEY_RIGHT: "Right",
+			KEY_F1: "F1", KEY_F2: "F2", KEY_F3: "F3", KEY_F4: "F4",
+			KEY_F5: "F5", KEY_F6: "F6", KEY_F7: "F7", KEY_F8: "F8",
+			KEY_F9: "F9", KEY_F10: "F10", KEY_F11: "F11", KEY_F12: "F12",
+			KEY_C: "C", KEY_1: "1", KEY_2: "2", KEY_3: "3",
+		}
+		var keycode: int = (event as InputEventKey).physical_keycode
+		if keycode in mapping:
+			return mapping[keycode]
+	return ""
 
 func get_display_name(key_name: String) -> String:
 	if key_name.is_empty():

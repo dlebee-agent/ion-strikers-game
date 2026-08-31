@@ -28,6 +28,7 @@ var kills_row: HBoxContainer
 var bots_dev_wrap: Control
 var brief_shoot_row: Control
 var brief_host: Label
+var sum_network: Label
 var sum_mode: Label
 var sum_limit: Label
 var sum_cap: Label
@@ -55,6 +56,7 @@ var _listening_slot: int = -1
 var _listening_button: Button
 var _blip_t: float = 0.0
 
+var selected_hosting: String = "lan"
 var selected_mode: String = "classic"
 var selected_map: String = "parkour"
 var selected_rounds: int = 10
@@ -66,6 +68,7 @@ var selected_bots_shoot: bool = true
 var invert_y: bool = false
 
 var _mode_btns: Array[Button] = []
+var _hosting_btns: Array[Button] = []
 var _map_select: OptionButton
 var _round_btns: Array[Button] = []
 var _kill_btns: Array[Button] = []
@@ -75,6 +78,9 @@ var _bot_yes: Button
 var _bot_no: Button
 var _shoot_yes: Button
 var _shoot_no: Button
+var _local_dedicated: LocalDedicated
+var _game_client: GameClient
+var _connecting := false
 
 
 func _ready() -> void:
@@ -326,6 +332,11 @@ func _build_home() -> void:
 	settings_btn.pressed.connect(func() -> void: UiRoot.show("settings"))
 	tiles.add_child(settings_btn)
 
+	var quit_btn := _make_tile("Quit", "Exit the game")
+	quit_btn.pressed.connect(func() -> void:
+		ConfirmPrompt.ask("Quit Ion Strikers?", func() -> void: get_tree().quit()))
+	tiles.add_child(quit_btn)
+
 
 func _build_join() -> void:
 	join_screen = _screen()
@@ -428,7 +439,24 @@ func _build_create() -> void:
 	left.add_theme_constant_override("separation", 0)
 	grid.add_child(left)
 
-	left.add_child(_sec("Game mode", true))
+	left.add_child(_sec("Network", true))
+	var hosting_row := HBoxContainer.new()
+	hosting_row.add_theme_constant_override("separation", 10)
+	_hosting_btns = [
+		_make_opt("LAN", "This machine. Others can join your network.", "lan"),
+		_make_opt("Hosted", "Public lobby on the Ion Strikers servers.", "hosted"),
+	]
+	_hosting_btns[0].set_meta("active", true)
+	_hosting_btns[1].disabled = true
+	_hosting_btns[1].modulate.a = 0.45
+	for b in _hosting_btns:
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hosting_row.add_child(b)
+		b.pressed.connect(_on_hosting_picked.bind(b))
+	left.add_child(hosting_row)
+	_paint_opts(_hosting_btns)
+
+	left.add_child(_sec("Game mode"))
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 10)
 	_mode_btns = [
@@ -601,6 +629,7 @@ func _build_create() -> void:
 	bv.add_child(sum_m)
 
 	brief_host = _kv(bv, "Host", "Guest")
+	sum_network = _kv(bv, "Network", "LAN")
 	sum_limit = _kv(bv, "Limit", "first to 10")
 	sum_cap = _kv(bv, "Player slots", "12")
 	sum_spec = _kv(bv, "Extra spectators", "+12")
@@ -1114,6 +1143,15 @@ func _on_mode_picked(b: Button) -> void:
 	_refresh_brief()
 
 
+func _on_hosting_picked(b: Button) -> void:
+	if b.disabled:
+		return
+	selected_hosting = str(b.get_meta("id"))
+	_exclusive(_hosting_btns, b)
+	_paint_opts(_hosting_btns)
+	_refresh_brief()
+
+
 func _on_map_selected(index: int) -> void:
 	var id := str(_map_select.get_item_metadata(index))
 	if id != "parkour":
@@ -1176,6 +1214,8 @@ func _refresh_brief() -> void:
 	brief_shoot_row.visible = show_dev
 	if brief_host:
 		brief_host.text = _callsign if not _callsign.is_empty() else "Guest"
+	if sum_network:
+		sum_network.text = "LAN" if selected_hosting == "lan" else "Hosted"
 
 
 func _render_server_list() -> void:
@@ -1198,7 +1238,72 @@ func _on_quick_join() -> void:
 
 
 func _on_launch() -> void:
-	launch_note.text = "No Game Server in this build — create is wired, waiting on the host."
+	if selected_hosting != "lan":
+		launch_note.text = "Hosted games need the Game API — not in this build."
+		return
+	if _connecting:
+		return
+	_connecting = true
+	launch_note.text = "Starting local server..."
+
+	_local_dedicated = LocalDedicated.new()
+	var sname := server_in.text.strip_edges()
+	var port := _local_dedicated.start(selected_map, sname)
+	if port < 0:
+		launch_note.text = "Failed to start the local server."
+		_connecting = false
+		return
+
+	# Give the server a moment to bind before connecting.
+	await get_tree().create_timer(0.6).timeout
+	if not is_inside_tree():
+		_cleanup_launch()
+		return
+
+	launch_note.text = "Connecting..."
+	_game_client = GameClient.new()
+	add_child(_game_client)
+	_game_client.connected_to_lobby.connect(_on_lobby_joined)
+	_game_client.connection_failed.connect(_on_connect_failed)
+	_game_client.connect_to_server("127.0.0.1", port, _callsign)
+
+
+func _on_lobby_joined(init_data: Dictionary) -> void:
+	_connecting = false
+	AudioMix.fade_out_keep_place(500.0)
+
+	# Remove client from this scene tree so the match scene can own it.
+	if _game_client:
+		remove_child(_game_client)
+
+	var packed: PackedScene = load("res://scenes/match/match.tscn")
+	var match_scene = packed.instantiate()
+	match_scene.init_data = init_data
+	match_scene.game_client = _game_client
+
+	# Stash the launcher so the menu can kill the server when it comes back.
+	match_scene.set_meta("_local_dedicated", _local_dedicated)
+
+	get_tree().root.add_child(match_scene)
+	get_tree().current_scene = match_scene
+	queue_free()
+
+
+func _on_connect_failed(reason: String) -> void:
+	_connecting = false
+	launch_note.text = reason
+	_cleanup_launch()
+
+
+func _cleanup_launch() -> void:
+	if _game_client:
+		_game_client.disconnect_from_server()
+		if _game_client.is_inside_tree():
+			_game_client.queue_free()
+		_game_client = null
+	if _local_dedicated:
+		_local_dedicated.stop()
+		_local_dedicated = null
 
 
 func _on_callsign_go() -> void:
@@ -1301,18 +1406,10 @@ func _rebuild_binds_ui() -> void:
 		head.add_child(a)
 		binds_container.add_child(head)
 		for action_name: String in actions:
-			binds_container.add_child(_bind_row(InputBinds.BIND_LABELS.get(action_name, action_name), action_name, false))
-	var fh := MenuLook.kicker("Fixed", MenuLook.CY, 10)
-	var fhm := MarginContainer.new()
-	fhm.add_theme_constant_override("margin_top", 20)
-	fhm.add_theme_constant_override("margin_bottom", 8)
-	fhm.add_child(fh)
-	binds_container.add_child(fhm)
-	for pair: Array in InputBinds.BIND_FIXED:
-		binds_container.add_child(_bind_row(str(pair[0]), "", true, str(pair[1])))
+			binds_container.add_child(_bind_row(InputBinds.BIND_LABELS.get(action_name, action_name), action_name))
 
 
-func _bind_row(label: String, action_name: String, fixed: bool, fixed_key := "") -> Control:
+func _bind_row(label: String, action_name: String) -> Control:
 	var wrap := PanelContainer.new()
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.043, 0.039, 0.086, 0.55)
@@ -1328,26 +1425,16 @@ func _bind_row(label: String, action_name: String, fixed: bool, fixed_key := "")
 	var lab := MenuLook.body(label, 14, MenuLook.INK)
 	lab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(lab)
-	if fixed:
-		var k := Button.new()
-		k.text = fixed_key
-		k.custom_minimum_size = Vector2(96, 30)
-		MenuLook.apply_bind_key(k, false, false, true)
-		row.add_child(k)
-		var empty := Control.new()
-		empty.custom_minimum_size.x = 96
-		row.add_child(empty)
-	else:
-		for slot in 2:
-			var key_name: String = InputBinds.bindings[action_name][slot]
-			var btn := Button.new()
-			btn.text = InputBinds.get_display_name(key_name)
-			btn.custom_minimum_size = Vector2(96, 30)
-			MenuLook.apply_bind_key(btn, key_name.is_empty(), false, false)
-			var bound_action := action_name
-			var bound_slot := slot
-			btn.pressed.connect(func() -> void: _start_listening(bound_action, bound_slot, btn))
-			row.add_child(btn)
+	for slot in 2:
+		var key_name: String = InputBinds.bindings[action_name][slot]
+		var btn := Button.new()
+		btn.text = InputBinds.get_display_name(key_name)
+		btn.custom_minimum_size = Vector2(96, 30)
+		MenuLook.apply_bind_key(btn, key_name.is_empty(), false, false)
+		var bound_action := action_name
+		var bound_slot := slot
+		btn.pressed.connect(func() -> void: _start_listening(bound_action, bound_slot, btn))
+		row.add_child(btn)
 	var gap := MarginContainer.new()
 	gap.add_theme_constant_override("margin_bottom", 6)
 	gap.add_child(wrap)
@@ -1365,7 +1452,12 @@ func _start_listening(action_name: String, slot: int, btn: Button) -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if _listening_action.is_empty():
 		return
-	if event is InputEventKey and event.pressed:
+	if event is InputEventKey and event.pressed and not event.echo:
+		_capture_bind_event(event)
+
+
+func _capture_bind_event(event: InputEvent) -> void:
+	if event is InputEventKey:
 		var key_event := event as InputEventKey
 		if key_event.keycode == KEY_ESCAPE:
 			_stop_listening()
@@ -1374,10 +1466,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			InputBinds.set_bind(_listening_action, _listening_slot, "")
 			_stop_listening()
 			return
-		var key_name := _keycode_to_name(key_event.physical_keycode)
-		if not key_name.is_empty():
-			InputBinds.set_bind(_listening_action, _listening_slot, key_name)
-		_stop_listening()
+	var key_name := InputBinds.event_to_bind_name(event)
+	if not key_name.is_empty():
+		InputBinds.set_bind(_listening_action, _listening_slot, key_name)
+	_stop_listening()
 
 
 func _stop_listening() -> void:
@@ -1389,28 +1481,15 @@ func _stop_listening() -> void:
 	_rebuild_binds_ui()
 
 
-func _keycode_to_name(keycode: int) -> String:
-	var map := {
-		KEY_W: "W", KEY_A: "A", KEY_S: "S", KEY_D: "D",
-		KEY_E: "E", KEY_F: "F", KEY_G: "G", KEY_H: "H",
-		KEY_I: "I", KEY_J: "J", KEY_K: "K", KEY_L: "L",
-		KEY_M: "M", KEY_N: "N", KEY_O: "O", KEY_P: "P",
-		KEY_Q: "Q", KEY_R: "R", KEY_T: "T", KEY_U: "U",
-		KEY_V: "V", KEY_X: "X", KEY_Y: "Y", KEY_Z: "Z",
-		KEY_SPACE: "Space", KEY_SHIFT: "Shift", KEY_CTRL: "Ctrl",
-		KEY_TAB: "Tab", KEY_ENTER: "Enter",
-		KEY_UP: "Up", KEY_DOWN: "Down", KEY_LEFT: "Left", KEY_RIGHT: "Right",
-		KEY_F1: "F1", KEY_F2: "F2", KEY_F3: "F3", KEY_F4: "F4",
-		KEY_F5: "F5", KEY_F6: "F6", KEY_F7: "F7", KEY_F8: "F8",
-		KEY_F9: "F9", KEY_F10: "F10", KEY_F11: "F11", KEY_F12: "F12",
-		KEY_C: "C", KEY_1: "1", KEY_2: "2", KEY_3: "3",
-	}
-	if keycode in map:
-		return map[keycode]
-	return ""
-
-
 func _input(event: InputEvent) -> void:
+	if ConfirmPrompt.is_open():
+		return
+	if not _listening_action.is_empty() and event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed:
+			_capture_bind_event(mb)
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_cancel"):
 		if UiRoot.current_screen != "menu" and UiRoot.current_screen != "callsign":
 			if not _listening_action.is_empty():

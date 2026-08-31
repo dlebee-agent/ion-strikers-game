@@ -30,7 +30,6 @@ var _colliders: Array[AABB] = []
 var team_color: String = "blue"
 # Bumped to abandon a queued return-to-idle, standing in for clearTimeout().
 var _fp_once_gen := 0
-var _melee_was_held := false
 # Both bodies get an orb: only one is on screen at a time, but switching view
 # mid-charge should not lose the light.
 var _fp_charge_orb: ChargeOrb
@@ -387,16 +386,14 @@ func process_input(dt: float) -> void:
 
 	movement.update(dt, wish_fwd, wish_side, want_jump, want_crouch, want_walk, _colliders)
 
-	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if InputBinds.is_action_pressed("fire"):
 		weapon.try_fire(camera_rig.get_aim_origin(), camera_rig.get_aim_direction(),
 			_colliders)
 
-	# Mouse-1 auto-fires while held, but mouse-2 is one punch per click: holding it
-	# should not machine-gun the melee once its cooldown lapses.
-	var melee_held := Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
-	if melee_held and not _melee_was_held:
+	# Auto-fire while held; melee is one punch per press so holding it does not
+	# machine-gun once the cooldown lapses.
+	if InputBinds.is_action_just_pressed("melee"):
 		weapon.try_melee()
-	_melee_was_held = melee_held
 
 	if InputBinds.is_action_just_pressed("special"):
 		weapon.start_special()

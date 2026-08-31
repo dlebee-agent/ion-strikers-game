@@ -1,6 +1,12 @@
 ; Engine configuration file.
 ; It's best edited using the editor UI and not directly,
-; but it can also be edited manually with care.
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
 
 [application]
 
@@ -15,10 +21,7 @@ DevMode="*res://core/dev_mode.gd"
 InputBinds="*res://core/input_binds.gd"
 UiRoot="*res://core/ui_root.gd"
 AudioMix="*res://core/audio_mix.gd"
-
-[audio]
-
-buses/default_bus_layout="res://default_bus_layout.tres"
+ConfirmPrompt="*res://ui/confirm_prompt.gd"
 
 [display]
 
@@ -41,6 +44,5 @@ ui_cancel={
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
 anti_aliasing/quality/msaa_3d=2
 environment/defaults/default_clear_color=Color(0.043, 0.039, 0.086, 1)

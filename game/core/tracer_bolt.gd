@@ -16,9 +16,9 @@ const CORE_COLOR := Color(1.0, 1.0, 1.0, 0.95)
 # hit flashes with; a body hit flashes the bolt colour itself, so the two read
 # differently without needing a hit marker.
 const BOLT_RED := Color8(255, 59, 70)
-const BOLT_BLUE := Color8(53, 255, 158)
+const BOLT_BLUE := Color8(53, 158, 255)
 const GLOW_RED := Color8(255, 138, 144)
-const GLOW_BLUE := Color8(174, 255, 218)
+const GLOW_BLUE := Color8(174, 218, 255)
 
 var _muzzle: Vector3
 var _dir: Vector3
