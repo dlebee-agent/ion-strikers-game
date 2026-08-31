@@ -756,7 +756,11 @@ func add_chat_message(name_text: String, text: String, team: int, team_only: boo
 	if not _match_over_active:
 		var tw := create_tween()
 		tw.tween_interval(CHAT_TTL)
-		tw.tween_callback(_expire_chat_row.bind(row))
+		tw.tween_callback(func() -> void:
+			if _match_over_active or not is_instance_valid(row):
+				return
+			_drop_chat_row(row)
+		)
 
 
 func open_chat(team_only: bool) -> void:
@@ -914,16 +918,10 @@ func _trim_chat_log() -> void:
 
 
 func _drop_chat_row(row: Node) -> void:
-	if row == null or row.get_parent() != _chat_log:
+	if not is_instance_valid(row) or row.get_parent() != _chat_log:
 		return
 	_chat_log.remove_child(row)
 	row.queue_free()
-
-
-func _expire_chat_row(row: Node) -> void:
-	if _match_over_active:
-		return
-	_drop_chat_row(row)
 
 
 func _chat_accent(team: int, _team_only: bool, sys: bool) -> Color:
