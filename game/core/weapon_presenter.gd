@@ -143,20 +143,30 @@ func _muzzle_point(origin: Vector3, direction: Vector3) -> Vector3:
 
 func _spawn_tracer(origin: Vector3, muzzle: Vector3, direction: Vector3, world: CollisionWorld) -> void:
 	var dir := direction.normalized()
-	var hit_dist := raycast_distance(origin, dir, world)
-	var impact_from_muzzle := maxf(0.0, hit_dist - MUZZLE_FORWARD)
 	var scene := get_tree().current_scene
 	if not scene:
 		return
 
+	# The shot is traced along the aim line, from the eye, because that is the
+	# line the server scores it on. The bolt is drawn from the muzzle, which sits
+	# forward of and below the eye, so it has to be aimed at the impact point
+	# rather than fired along a parallel line. Taking the aim distance and
+	# subtracting the forward offset gave a streak that stayed parallel to the
+	# aim line, which is how bolts ended up carrying on through walls the shot
+	# had already stopped at.
+	var impact := origin + dir * raycast_distance(origin, dir, world)
+	var to_impact := impact - muzzle
+	var travel := to_impact.length()
+	var bolt_dir := to_impact / travel if travel > 0.0001 else dir
+
 	# Nothing worth drawing at point-blank range, but the hit itself still has to
 	# register: the flash goes off without a streak in front of it.
-	if impact_from_muzzle <= TracerBolt.BOLT_START:
-		ImpactFlash.spawn(scene, muzzle + dir * impact_from_muzzle,
+	if travel <= TracerBolt.BOLT_START:
+		ImpactFlash.spawn(scene, impact,
 			TracerBolt.glow_color(team), TracerBolt.bolt_color(team), false)
 		return
 
-	TracerBolt.spawn(scene, muzzle, dir, impact_from_muzzle, team)
+	TracerBolt.spawn(scene, muzzle, bolt_dir, travel, team)
 
 
 func raycast_distance(origin: Vector3, dir: Vector3, world: CollisionWorld) -> float:
@@ -175,25 +185,3 @@ func _trace_world(origin: Vector3, dir: Vector3, world: CollisionWorld,
 	if world == null:
 		return max_dist
 	return world.ray_distance(origin, dir.normalized(), max_dist, _shot_trace, mask)
-
-func _ray_aabb(origin: Vector3, dir: Vector3, box: AABB) -> float:
-	var tmin := -1e20
-	var tmax := 1e20
-
-	for i in 3:
-		if absf(dir[i]) < 1e-8:
-			if origin[i] < box.position[i] or origin[i] > box.end[i]:
-				return -1.0
-		else:
-			var t1 := (box.position[i] - origin[i]) / dir[i]
-			var t2 := (box.end[i] - origin[i]) / dir[i]
-			if t1 > t2:
-				var tmp := t1
-				t1 = t2
-				t2 = tmp
-			tmin = maxf(tmin, t1)
-			tmax = minf(tmax, t2)
-			if tmin > tmax:
-				return -1.0
-
-	return tmin if tmin > 0.0 else -1.0
