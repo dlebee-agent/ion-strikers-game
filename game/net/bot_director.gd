@@ -560,12 +560,15 @@ func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -
 	if support >= feet:
 		feet = support
 		ai["vy"] = 0.0
+		pawn.grounded = true
 	else:
 		var vy := float(ai["vy"]) - FALL_ACCEL * dt
 		feet += vy * dt
+		pawn.grounded = false
 		if feet <= support:
 			feet = support
 			vy = 0.0
+			pawn.grounded = true
 		ai["vy"] = vy
 
 	pawn.position = Vector3(nx, feet, nz)

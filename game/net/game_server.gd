@@ -319,7 +319,7 @@ func _handle_state(peer_id: int, msg: Dictionary) -> void:
 	inst.update_state(peer_id,
 		Vector3(float(msg.get("x", 0.0)), float(msg.get("y", 0.0)), float(msg.get("z", 0.0))),
 		float(msg.get("yaw", 0.0)), float(msg.get("pitch", 0.0)),
-		bool(msg.get("crouched", false)))
+		bool(msg.get("crouched", false)), bool(msg.get("grounded", true)))
 
 
 func _handle_set_team(peer_id: int, msg: Dictionary) -> void:

@@ -378,7 +378,8 @@ func _physics_process(dt: float) -> void:
 		pawn.process_input(dt)
 		if client:
 			client.send_state(pawn.movement.position, pawn.movement.yaw,
-				pawn.movement.pitch, pawn.movement.is_crouching)
+				pawn.movement.pitch, pawn.movement.is_crouching,
+				pawn.movement.on_ground)
 		_sync_special_hud()
 
 	_snap_time += dt
@@ -623,6 +624,7 @@ func _on_snap(snap: Dictionary) -> void:
 		var p_bot := (pflags & Protocol.PFLG_BOT) != 0
 		var p_special_armed := (pflags & Protocol.PFLG_SPECIAL_ARMED) != 0
 		var p_special_charging := (pflags & Protocol.PFLG_SPECIAL_CHARGING) != 0
+		var p_grounded := (pflags & Protocol.PFLG_GROUNDED) != 0
 
 		p["alive"] = p_alive
 		p["crouched"] = p_crouched
@@ -630,6 +632,7 @@ func _on_snap(snap: Dictionary) -> void:
 		p["bot"] = p_bot
 		p["special_armed"] = p_special_armed
 		p["special_charging"] = p_special_charging
+		p["grounded"] = p_grounded
 
 		if pid == my_id:
 			if p_special_armed and _special_spent:

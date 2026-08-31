@@ -250,7 +250,8 @@ func handle_set_team(peer_id: int, new_team: int) -> void:
 
 # ── State updates from client ────────────────────────────────────────────
 
-func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool) -> void:
+func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool,
+		grounded: bool) -> void:
 	if not pawns.has(peer_id):
 		return
 	var pawn: ServerPawn = pawns[peer_id]
@@ -260,6 +261,7 @@ func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched
 	pawn.yaw = yaw
 	pawn.pitch = pitch
 	pawn.crouched = crouched
+	pawn.grounded = grounded
 
 
 # ── Combat ───────────────────────────────────────────────────────────────
@@ -432,6 +434,8 @@ func build_snap() -> PackedByteArray:
 		var flags := 0
 		if pawn_ref != null and pawn_ref.alive:
 			flags |= Protocol.PFLG_ALIVE
+		if pawn_ref and pawn_ref.grounded:
+			flags |= Protocol.PFLG_GROUNDED
 		if pawn_ref and pawn_ref.crouched:
 			flags |= Protocol.PFLG_CROUCHED
 		if pawn_ref and _is_protected(pawn_ref):

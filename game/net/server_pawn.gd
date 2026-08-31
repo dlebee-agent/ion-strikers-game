@@ -12,6 +12,10 @@ var yaw: float = 0.0
 var pitch: float = 0.0
 var hp: int = 100
 var alive: bool = true
+## Whether the pawn is standing on something. Reported by the owning client
+## for players, set from the walk step for bots. The animation on every other
+## client reads this rather than guessing from vertical speed.
+var grounded := true
 var crouched: bool = false
 var protected_until: float = 0.0
 var respawn_at: float = 0.0
