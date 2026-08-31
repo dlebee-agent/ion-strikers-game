@@ -5,7 +5,7 @@ signal banner_requested(text: String, color: Color, sub_text: String)
 const AUDIO_PATH := "res://assets/audio/"
 const DEBOUNCE_MS := 600
 
-const SPREE_LADDER: Dictionary = {
+const SPREE_LADDER: Dictionary[int, String] = {
 	3: "triple", 5: "multi", 6: "rampage", 7: "spree", 8: "dominating",
 	9: "impressive", 10: "unstoppable", 11: "outstanding", 12: "mega", 13: "ultra",
 	14: "eagleeye", 15: "ownage", 16: "comboking", 17: "maniac", 18: "ludicrous",
@@ -83,18 +83,16 @@ func handle_announce(msg: Dictionary) -> void:
 		show_banner("FIRST BLOOD", COLOR_RED, who)
 		return
 
-	var spree_val: int = msg.get("spree", 0)
-	if spree_val > 0:
-		var key: String = SPREE_LADDER.get(mini(spree_val, 30), "")
-		if not key.is_empty():
-			play_clip(key)
-			var who: String = msg.get("by_name", "")
-			show_banner(ANNOUNCE_TEXT.get(key, key).to_upper(), COLOR_GOLD, who)
-			return
+	var who: String = msg.get("by_name", "")
+	# A streak-ladder clip wins over a simultaneous headshot.
+	var clip := _spree_clip(int(msg.get("spree", 0)))
+	if not clip.is_empty():
+		play_clip(clip)
+		show_banner(ANNOUNCE_TEXT.get(clip, clip).to_upper(), COLOR_GOLD, who)
+		return
 
 	if msg.get("head", false):
 		play_clip("headshot")
-		var who: String = msg.get("by_name", "")
 		show_banner("HEADSHOT", COLOR_WHITE, who)
 
 
@@ -163,18 +161,37 @@ func player_respawn() -> void:
 	play_sfx("respawn")
 
 
+func _spree_clip(spree: int) -> String:
+	if spree <= 0:
+		return ""
+	return SPREE_LADDER.get(mini(spree, 30), "")
+
+
 func _load_audio(key: String) -> AudioStream:
 	if _cache.has(key):
 		return _cache[key]
 
 	for ext: String in ["wav", "mp3", "ogg"]:
 		var path: String = AUDIO_PATH + key + "." + ext
-		if not ResourceLoader.exists(path):
+		if ResourceLoader.exists(path):
+			var res: Resource = load(path)
+			if res is AudioStream:
+				_cache[key] = res
+				return res
+		if not FileAccess.file_exists(path):
 			continue
-		var res: Resource = load(path)
-		if res is AudioStream:
-			_cache[key] = res
-			return res
+		var abs_path := ProjectSettings.globalize_path(path)
+		var stream: AudioStream = null
+		match ext:
+			"wav":
+				stream = AudioStreamWAV.load_from_file(abs_path)
+			"mp3":
+				stream = AudioStreamMP3.load_from_file(abs_path)
+			"ogg":
+				stream = AudioStreamOggVorbis.load_from_file(abs_path)
+		if stream:
+			_cache[key] = stream
+			return stream
 
 	_cache[key] = null
 	return null
