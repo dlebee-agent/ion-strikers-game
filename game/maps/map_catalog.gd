@@ -12,9 +12,9 @@ extends RefCounted
 # (sky bake, build checks) can start with a stale global class cache, where an
 # unresolved class name fails this whole script's compile.
 const _ParkourMap := preload("res://maps/parkour/parkour.gd")
-const _PlatformsMap := preload("res://maps/platforms/platforms.gd")
+const _SkydeckMap := preload("res://maps/skydeck/skydeck.gd")
 
-const BUILTIN_IDS: Array[String] = ["parkour", "platforms"]
+const BUILTIN_IDS: Array[String] = ["parkour", "skydeck"]
 
 const COMMUNITY_DIR := "res://maps/community"
 const COMMUNITY_PREFIX := "community/"
@@ -28,8 +28,8 @@ static var _cache: Dictionary = {}
 # which is also what the community-map paths fall back to when an import fails.
 static func builtin_definition(map_id: String) -> Dictionary:
 	match map_id:
-		"platforms":
-			return _PlatformsMap.definition()
+		"skydeck":
+			return _SkydeckMap.definition()
 		_:
 			return _ParkourMap.definition()
 

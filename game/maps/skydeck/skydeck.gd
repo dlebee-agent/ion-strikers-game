@@ -1,8 +1,8 @@
-class_name PlatformsMap
+class_name SkydeckMap
 extends RefCounted
 
 # Reverse-engineered from the grid-arena reference model (grid-arena.obj),
-# which is where the map got its working name before it became Platforms.
+# which is where the map got its working name before it became Skydeck.
 # The model is a 60x40 deck with the teams split along its long axis; the
 # game keeps blue on -z and red on +z, so the model is rotated 90 degrees
 # here: model (x, z) -> game (z, x). Wedge ramps in the model become stairs
@@ -11,13 +11,13 @@ extends RefCounted
 # any cell-to-cell rise past STEP_LIP, so a steeper pitch would read as a
 # cliff and cut the ramp out of every bot route.
 #
-# Call PlatformsMap.definition() -> Dictionary, then MapEngine.compile().
+# Call SkydeckMap.definition() -> Dictionary, then MapEngine.compile().
 
 
 static func definition() -> Dictionary:
 	return {
-		"id": "platforms",
-		"name": "Platforms",
+		"id": "skydeck",
+		"name": "Skydeck",
 		"desc": "Three tiers: spawn garages under twin base decks, catwalks along the walls, and a ring floating over the core.",
 		"arena": 30.0,
 		# The deck is 60 long but only 40 wide; the floor and grid stop at the

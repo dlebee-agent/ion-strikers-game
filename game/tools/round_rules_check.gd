@@ -167,7 +167,7 @@ func _unknown_mode_is_arena() -> void:
 
 func _match(mode: String) -> GameInstance:
 	var inst := GameInstance.new({
-		"map_id": "platforms", "mode": mode, "bots": false,
+		"map_id": "skydeck", "mode": mode, "bots": false,
 		"kills": 999, "rounds": 99,
 	})
 	root.add_child(inst)

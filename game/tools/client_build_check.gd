@@ -13,7 +13,7 @@ func _initialize() -> void:
 	var host := Node3D.new()
 	root.add_child(host)
 
-	for map_id in ["parkour", "platforms", "community/arena1"]:
+	for map_id in ["parkour", "skydeck", "community/arena1"]:
 		print("== ", map_id)
 		var t0 := Time.get_ticks_msec()
 		if MapCatalog.is_community(map_id):

@@ -2,13 +2,13 @@ extends SceneTree
 
 # Sanity harness for the grid arena map: nav coverage, spawn routing, and the
 # surfaces its routes depend on (garage, deck, ramps, core, catwalk, sky ring).
-# Run: godot --headless --path game --script res://tools/platforms_check.gd
+# Run: godot --headless --path game --script res://tools/skydeck_check.gd
 
 var failed := 0
 
 
 func _initialize() -> void:
-	var compiled := MapEngine.compile(MapCatalog.builtin_definition("platforms"))
+	var compiled := MapEngine.compile(MapCatalog.builtin_definition("skydeck"))
 	var cols := MapBuilder.build_world(compiled)
 	var arena: float = compiled["arena"]
 
