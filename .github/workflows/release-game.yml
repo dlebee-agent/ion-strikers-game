@@ -191,7 +191,8 @@ jobs:
   # Windows client installer. Godot exports an .exe + .pck; Inno Setup wraps
   # that into a normal setup wizard. Azure Artifact Signing (Trusted Signing)
   # Authenticode-signs the game exe, the setup.exe, and Inno's embedded
-  # uninstaller via OIDC — no client secret.
+  # uninstaller via OIDC — no client secret. The signed exe(+pck) is also
+  # published as a portable zip alongside the setup.
   #
   # Requires GitHub Environment "release" (Settings → Environments) so tag
   # pushes can federate to Entra. Repo variables supply account/profile ids.
@@ -282,6 +283,24 @@ jobs:
             & $sign $exe.FullName
           }
 
+      - name: Package signed portable zip
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $name = "ion-strikers-$env:VERSION-windows-x86_64"
+          $staging = Join-Path $env:RUNNER_TEMP $name
+          if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item -Path 'stage\*' -Destination $staging -Recurse -Force
+          $zip = Join-Path (Resolve-Path dist).Path "$name.zip"
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          # Folder root in the zip matches the pre-Inno portable layout.
+          Compress-Archive -Path $staging -DestinationPath $zip
+          Get-ChildItem dist | Format-Table Name, Length
+
       - name: Build and sign setup.exe (+ uninstaller)
         env:
           VERSION: ${{ needs.validate.outputs.version }}
@@ -320,11 +339,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
           Get-ChildItem dist | Format-Table Name, Length
 
-      - name: Upload Windows installer
+      - name: Upload Windows client artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/*.exe
+          path: |
+            dist/*-setup.exe
+            dist/*.zip
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
