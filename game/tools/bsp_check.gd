@@ -174,11 +174,7 @@ func _check_spawns_clear(level: TbLevel) -> void:
 # generator, which takes the better part of a minute and runs in the middle of
 # a connect. Confirm this one is baked rather than borrowed.
 func _check_sky(level: TbLevel) -> void:
-	var baked := true
-	for i in 6:
-		if not ResourceLoader.exists("res://maps/sky_%s_%d.png" % [level.sky_id, i]):
-			baked = false
-			break
+	var baked := MapCatalog.has_baked_sky(level.sky_id)
 	if baked:
 		print("  sky           '%s' is baked" % level.sky_id)
 	else:
