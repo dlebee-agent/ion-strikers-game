@@ -209,7 +209,7 @@ static func _build_walls(parent: Node3D, walls: Array, arena: float) -> void:
 		# Glowing top trim
 		var trim := _trim_for(b["z"], arena)
 		_add_box_mesh(parent, Vector3(b["x"], b["h"], b["z"]),
-			Vector3(b["sx"] + 0.06, 0.12, b["sz"] + 0.06), trim)
+			Vector3(_trim_span(b["sx"], 0.06), 0.12, _trim_span(b["sz"], 0.06)), trim)
 
 
 # ---- cover ----
@@ -223,7 +223,17 @@ static func _build_cover(parent: Node3D, cover_list: Array, arena: float) -> voi
 		# Accent seam on top
 		var trim := _trim_for(b["z"], arena)
 		_add_box_mesh(parent, Vector3(b["x"], b["h"], b["z"]),
-			Vector3(b["sx"] + 0.05, 0.08, b["sz"] + 0.05), trim)
+			Vector3(_trim_span(b["sx"], 0.05), 0.08, _trim_span(b["sz"], 0.05)), trim)
+
+
+# The trim sits just inside its box rather than overhanging it. An overhang
+# double-renders wherever two boxes meet edge to edge: both trims claim the
+# same strip at the same height, and the pair flickers as the depth test
+# picks between them. Inset, they never touch. It also keeps the trim's
+# sides off the box's own sides, which are coplanar at an equal width.
+# A box thinner than the inset keeps half its width instead of inverting.
+static func _trim_span(size: float, inset: float) -> float:
+	return maxf(size - inset, size * 0.5)
 
 
 static func _trim_for(z: float, arena: float) -> StandardMaterial3D:

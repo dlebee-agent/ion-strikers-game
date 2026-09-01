@@ -25,12 +25,14 @@ func _initialize() -> void:
 	# its own ceiling; from the sky the deck rightly wins that column.
 	_surface(nav, "garage floor", 0.0, -27.5, 2.0, 0.0)
 	_surface(nav, "base deck", 0.0, -22.0, 12.0, 3.2)
-	_surface(nav, "gate ramp mid", 10.5, -8.6, 12.0, 1.8)
-	_surface(nav, "upramp mid", -8.1, -18.5, 12.0, 5.3)
+	# Probed at tread centres: a coordinate on the seam between two treads
+	# reads whichever the sweep catches first and tells you nothing.
+	_surface(nav, "gate ramp mid", 10.5, -8.5, 12.0, 1.8)
+	_surface(nav, "upramp mid", -7.6, -18.5, 12.0, 5.3)
 	_surface(nav, "core lane", -3.0, 0.0, 12.0, 1.6)
 	_surface(nav, "catwalk", 16.6, 0.0, 12.0, 7.0)
 	_surface(nav, "sky bridge", 11.6, 0.0, 12.0, 7.0)
-	_surface(nav, "sky ring", 0.0, 5.91, 12.0, 7.0)
+	_surface(nav, "sky ring", 0.0, 5.8, 12.0, 7.0)
 
 	print("-- line of sight --")
 	_check(nav.blocked(Vector3(0, 1.6, -27.5), Vector3(0, 1.15, 27.5)),

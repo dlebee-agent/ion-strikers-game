@@ -50,7 +50,7 @@ static func definition() -> Dictionary:
 			# Floor-to-deck ramps flanking the gates.
 			{
 				"stairs": {
-					"axis": "z", "at": 10.5, "start": -3.6, "spacing": -1.0,
+					"axis": "z", "at": 10.5, "start": -3.5, "spacing": -1.0,
 					"width": 4.4, "depth": 1.0,
 					"heights": [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0, 3.2],
 				},
@@ -61,7 +61,7 @@ static func definition() -> Dictionary:
 			# the model's wedge so the pitch stays bot-walkable.
 			{
 				"stairs": {
-					"axis": "x", "at": -18.5, "start": -2.1, "spacing": -1.0,
+					"axis": "x", "at": -18.5, "start": -1.6, "spacing": -1.0,
 					"width": 3.8, "depth": 1.0,
 					"heights": [
 						3.5, 3.8, 4.1, 4.4, 4.7, 5.0, 5.3,
@@ -78,24 +78,30 @@ static func definition() -> Dictionary:
 			{"cover": [11.0, -24.5, 1.8, 1.8], "h": 0.25, "on": 3.2, "base": 3.2, "mirror": "xz"},
 
 			# ---- high route: catwalks, bridges, sky ring ----
+			# Nothing up here shares a top plane with anything it touches: two
+			# surfaces at one height render the same pixels twice and flicker
+			# between them. Pieces that meet do so edge to edge, on numbers
+			# that line up exactly (ring 8.0, catwalk 14.1).
 			# Side catwalks running wall to wall on pillars.
 			{"cover": [16.6, 0.0, 5.0, 44.0], "h": 0.4, "on": 6.6, "base": 6.6, "mirror": "x"},
-			{"cover": [18.95, 0.0, 0.16, 44.0], "h": 0.75, "on": 7.4, "base": 7.4, "mirror": "x"},
+			{"cover": [18.95, 0.0, 0.16, 44.0], "h": 1.15, "on": 7.0, "base": 7.0, "mirror": "x"},
 			{"cover": [16.6, 4.0, 1.1, 1.1], "h": 6.6, "mirror": "xz"},
 			{"cover": [16.6, 12.0, 1.1, 1.1], "h": 6.6, "mirror": "xz"},
 			{"cover": [16.6, 20.0, 1.1, 1.1], "h": 6.6, "mirror": "xz"},
-			# Bridges from each catwalk to the sky ring.
-			{"cover": [11.6, 0.0, 10.5, 3.2], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "x"},
-			# Octagonal sky ring floating above the core (8 overlapped slabs).
-			{"cover": [2.45, 5.91, 5.89, 4.43], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "xz"},
-			{"cover": [5.91, 2.45, 4.43, 5.89], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "xz"},
+			# Bridges from each catwalk to the sky ring, butted to both.
+			{"cover": [11.05, 0.0, 6.1, 3.2], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "x"},
+			# Sky ring around the core orb: four bars enclosing an open middle
+			# the orb rises through. The model's octagon was eight overlapping
+			# slabs, which is the one shape this engine cannot draw cleanly.
+			{"cover": [5.8, 0.0, 4.4, 16.0], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "x"},
+			{"cover": [0.0, 5.8, 7.2, 4.4], "h": 0.35, "on": 6.65, "base": 6.65, "mirror": "z"},
 
 			# ---- core ----
 			{"cover": [0.0, 0.0, 16.0, 16.0], "h": 1.6},
 			# Ramps up the core platform on all four sides.
 			{
 				"stairs": {
-					"axis": "z", "at": 0.0, "start": -12.6, "spacing": 1.0,
+					"axis": "z", "at": 0.0, "start": -12.5, "spacing": 1.0,
 					"width": 4.5, "depth": 1.0,
 					"heights": [0.3, 0.6, 0.9, 1.2, 1.5],
 				},
@@ -103,7 +109,7 @@ static func definition() -> Dictionary:
 			},
 			{
 				"stairs": {
-					"axis": "x", "at": 0.0, "start": -12.6, "spacing": 1.0,
+					"axis": "x", "at": 0.0, "start": -12.5, "spacing": 1.0,
 					"width": 4.5, "depth": 1.0,
 					"heights": [0.3, 0.6, 0.9, 1.2, 1.5],
 				},
