@@ -2,7 +2,7 @@ extends Control
 
 const BUILTIN_MAPS: Array[Dictionary] = [
 	{"id": "parkour", "name": "Parkour Yard", "desc": "Mirrored stairs & jump blocks. Movement + jump test bed."},
-	{"id": "grid_arena", "name": "Grid Arena", "desc": "Twin base decks over spawn garages, side catwalks and a floating sky ring above the core."},
+	{"id": "platforms", "name": "Platforms", "desc": "Three tiers: spawn garages under twin base decks, catwalks along the walls, and a ring floating over the core."},
 ]
 
 const MenuStage = preload("res://scenes/menu/menu_stage.gd")

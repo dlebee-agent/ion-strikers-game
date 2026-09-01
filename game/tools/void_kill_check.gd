@@ -10,13 +10,13 @@ var _events: Array[Dictionary] = []
 
 
 func _initialize() -> void:
-	_case("under the map", "grid_arena", Vector3(0.0, -40.0, 0.0), true)
-	_case("past the side wall", "grid_arena", Vector3(40.0, 1.0, 0.0), true)
-	_case("past the end wall", "grid_arena", Vector3(0.0, 1.0, 40.0), true)
+	_case("under the map", "platforms", Vector3(0.0, -40.0, 0.0), true)
+	_case("past the side wall", "platforms", Vector3(40.0, 1.0, 0.0), true)
+	_case("past the end wall", "platforms", Vector3(0.0, 1.0, 40.0), true)
 	# Grid arena's floor is 41.2 x 60: a spot outside a square read of its
 	# arena size, but on the map, and it must survive.
-	_case("wide but on the floor", "grid_arena", Vector3(0.0, 3.5, -28.0), false)
-	_case("on the sky ring", "grid_arena", Vector3(5.8, 7.0, 0.0), false)
+	_case("wide but on the floor", "platforms", Vector3(0.0, 3.5, -28.0), false)
+	_case("on the sky ring", "platforms", Vector3(5.8, 7.0, 0.0), false)
 	_case("under the map", "parkour", Vector3(0.0, -40.0, 0.0), true)
 	_case("on the floor", "parkour", Vector3(0.0, 0.0, 0.0), false)
 

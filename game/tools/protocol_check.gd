@@ -10,7 +10,7 @@ var failed := 0
 
 
 func _initialize() -> void:
-	var maps := ["parkour", "grid_arena", "community/arena1"]
+	var maps := ["parkour", "platforms", "community/arena1"]
 	var decoded := Protocol.decode(Protocol.encode_hello(maps))
 	_check(int(decoded.get("t", -1)) == Protocol.Msg.HELLO, "hello type")
 	_check(int(decoded.get("v", 0)) == Protocol.PROTOCOL_VERSION, "hello version")

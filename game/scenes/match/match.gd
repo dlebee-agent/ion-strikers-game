@@ -1016,8 +1016,8 @@ func _map_display_name() -> String:
 	match _map_id:
 		"parkour":
 			return "Parkour Yard"
-		"grid_arena":
-			return "Grid Arena"
+		"platforms":
+			return "Platforms"
 		_:
 			return _map_id.capitalize()
 
