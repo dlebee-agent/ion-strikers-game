@@ -6,9 +6,12 @@ extends SceneTree
 # each one, mirroring what MapBuilder draws.
 # Run: godot --headless --path game --script res://tools/map_overlap_check.gd
 
-# Trims are inset by these margins, matching MapBuilder._trim_span.
-const WALL_INSET := 0.06
-const COVER_INSET := 0.05
+# The edge outline on a box top is modelled as the slab its bars sit within:
+# inset from every side by MapBuilder.EDGE_INSET and standing EDGE_H proud.
+# The bars never leave that slab, so if two slabs do not overlap the bars
+# under them cannot either.
+const TRIM_INSET := MapBuilder.EDGE_INSET * 2.0
+const TRIM_LIFT := MapBuilder.EDGE_H
 # Below this a shared edge is contact, not overlap.
 const EPS := 0.004
 
@@ -28,10 +31,10 @@ func _check_map(map_id: String) -> void:
 	var faces: Array = []
 	for b: Dictionary in compiled["walls"]:
 		faces.append(_face(b, 0.0, 0.0, "wall"))
-		faces.append(_face(b, 0.06, WALL_INSET, "wall-trim"))
+		faces.append(_face(b, TRIM_LIFT, TRIM_INSET, "wall-edge"))
 	for b: Dictionary in compiled["cover"]:
 		faces.append(_face(b, 0.0, 0.0, "cover"))
-		faces.append(_face(b, 0.04, COVER_INSET, "cover-trim"))
+		faces.append(_face(b, TRIM_LIFT, TRIM_INSET, "cover-edge"))
 
 	var hits := 0
 	for i in faces.size():
