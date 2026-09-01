@@ -106,7 +106,7 @@ func setup_map() -> void:
 
 
 func _setup_builtin_map() -> void:
-	var map_def: Dictionary = ParkourMap.definition()
+	var map_def: Dictionary = MapCatalog.builtin_definition(map_id)
 	var compiled := MapEngine.compile(map_def)
 	world = MapBuilder.build_world(compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))

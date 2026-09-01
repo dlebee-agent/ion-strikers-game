@@ -15,6 +15,16 @@ const COMMUNITY_PREFIX := "community/"
 static var _cache: Dictionary = {}
 
 
+# The shapes definition for a built-in map. Unknown ids fall back to parkour,
+# which is also what the community-map paths fall back to when an import fails.
+static func builtin_definition(map_id: String) -> Dictionary:
+	match map_id:
+		"grid_arena":
+			return GridArenaMap.definition()
+		_:
+			return ParkourMap.definition()
+
+
 static func is_community(map_id: String) -> bool:
 	return map_id.begins_with(COMMUNITY_PREFIX)
 

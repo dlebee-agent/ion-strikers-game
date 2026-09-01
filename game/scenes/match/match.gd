@@ -132,7 +132,7 @@ func _build_map() -> void:
 
 
 func _build_builtin_map() -> void:
-	var compiled := MapEngine.compile(ParkourMap.definition())
+	var compiled := MapEngine.compile(MapCatalog.builtin_definition(_map_id))
 	MapBuilder.build_visual(self, compiled)
 	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
@@ -1013,6 +1013,8 @@ func _map_display_name() -> String:
 	match _map_id:
 		"parkour":
 			return "Parkour Yard"
+		"grid_arena":
+			return "Grid Arena"
 		_:
 			return _map_id.capitalize()
 

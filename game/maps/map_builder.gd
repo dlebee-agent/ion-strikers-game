@@ -13,9 +13,9 @@ const LAYER_PAWNS := 2
 
 static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 	var out: Array[AABB] = []
-	var arena: float = compiled["arena"]
+	var half := _floor_half(compiled)
 	# Floor slab: top at y=0
-	out.append(AABB(Vector3(-arena, -2.0, -arena), Vector3(arena * 2, 2.0, arena * 2)))
+	out.append(AABB(Vector3(-half.x, -2.0, -half.y), Vector3(half.x * 2, 2.0, half.y * 2)))
 	for b: Dictionary in compiled["walls"]:
 		out.append(_box_to_aabb(b))
 	for b: Dictionary in compiled["cover"]:
@@ -44,9 +44,9 @@ static func build_ambience(parent: Node3D, compiled: Dictionary) -> void:
 
 
 static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
-	var arena: float = compiled["arena"]
+	var half := _floor_half(compiled)
 
-	_add_static_box(parent, Vector3(0.0, -1.0, 0.0), Vector3(arena * 2, 2.0, arena * 2))
+	_add_static_box(parent, Vector3(0.0, -1.0, 0.0), Vector3(half.x * 2, 2.0, half.y * 2))
 
 	for b: Dictionary in compiled["walls"]:
 		_add_static_box(parent, _box_center(b), _box_size(b))
@@ -70,10 +70,11 @@ static func _add_static_box(parent: Node3D, pos: Vector3, sz: Vector3) -> void:
 
 static func build_visual(parent: Node3D, compiled: Dictionary) -> Array[AABB]:
 	var arena: float = compiled["arena"]
+	var half := _floor_half(compiled)
 	var colliders := build_colliders(compiled)
 
-	_build_floor(parent, arena)
-	_build_grid(parent, arena)
+	_build_floor(parent, half)
+	_build_grid(parent, arena, half)
 	_build_walls(parent, compiled["walls"], arena)
 	_build_cover(parent, compiled["cover"], arena)
 	_build_pads(parent, compiled.get("pads", []))
@@ -81,6 +82,16 @@ static func build_visual(parent: Node3D, compiled: Dictionary) -> Array[AABB]:
 	_build_environment(parent, compiled)
 
 	return colliders
+
+
+# Half extents of the floor: square at the arena size unless the map gives
+# rectangular [half_x, half_z] extents.
+static func _floor_half(compiled: Dictionary) -> Vector2:
+	var arena: float = compiled["arena"]
+	var f: Array = compiled.get("floor", [])
+	if f.size() >= 2:
+		return Vector2(float(f[0]), float(f[1]))
+	return Vector2(arena, arena)
 
 
 static func _box_to_aabb(b: Dictionary) -> AABB:
@@ -130,10 +141,10 @@ static func _add_box_mesh(parent: Node3D, pos: Vector3, sz: Vector3, mat: Standa
 
 # ---- floor ----
 
-static func _build_floor(parent: Node3D, arena: float) -> void:
+static func _build_floor(parent: Node3D, half: Vector2) -> void:
 	var mi := MeshInstance3D.new()
 	var plane := PlaneMesh.new()
-	plane.size = Vector2(arena * 2, arena * 2)
+	plane.size = Vector2(half.x * 2, half.y * 2)
 	plane.material = _std_mat(0x0b0e16, 0.4, 0.4)
 	mi.mesh = plane
 	mi.position = Vector3.ZERO
@@ -142,26 +153,30 @@ static func _build_floor(parent: Node3D, arena: float) -> void:
 
 # ---- grid ----
 
-static func _build_grid(parent: Node3D, arena: float) -> void:
+static func _build_grid(parent: Node3D, arena: float, half: Vector2) -> void:
 	var grid_blue := _emissive_mat(0x1c6cff, 0.7)
 	var grid_red := _emissive_mat(0xff2d3f, 0.7)
 	var grid_mid := _emissive_mat(0x2aa0c0, 0.5)
 	# Fixed cell size so the floor reads the same density at any arena size.
 	var step := 1.4
-	var n := int(round((arena * 2.0) / step))
 
-	for i in n + 1:
-		var p := -arena + i * step
+	var nz := int(round((half.y * 2.0) / step))
+	for i in nz + 1:
+		var p := -half.y + i * step
 		# Lines running along X: tinted by their z position
 		var z_mat := _z_tint(p, arena, grid_blue, grid_red, grid_mid)
-		_add_grid_line(parent, Vector3(0, 0.015, p), Vector3(arena * 2, 0.02, 0.04), z_mat)
+		_add_grid_line(parent, Vector3(0, 0.015, p), Vector3(half.x * 2, 0.02, 0.04), z_mat)
+
+	var nx := int(round((half.x * 2.0) / step))
+	for i in nx + 1:
+		var p := -half.x + i * step
 		# Lines running along Z: split into 3 tinted segments
-		_add_grid_line(parent, Vector3(p, 0.015, -arena * 0.6), Vector3(0.04, 0.02, arena * 0.8), grid_blue)
-		_add_grid_line(parent, Vector3(p, 0.015, 0), Vector3(0.04, 0.02, arena * 0.44), grid_mid)
-		_add_grid_line(parent, Vector3(p, 0.015, arena * 0.6), Vector3(0.04, 0.02, arena * 0.8), grid_red)
+		_add_grid_line(parent, Vector3(p, 0.015, -half.y * 0.6), Vector3(0.04, 0.02, half.y * 0.8), grid_blue)
+		_add_grid_line(parent, Vector3(p, 0.015, 0), Vector3(0.04, 0.02, half.y * 0.44), grid_mid)
+		_add_grid_line(parent, Vector3(p, 0.015, half.y * 0.6), Vector3(0.04, 0.02, half.y * 0.8), grid_red)
 
 	# Bright center line
-	_add_grid_line(parent, Vector3(0, 0.015, 0), Vector3(arena * 2, 0.02, 0.18), _emissive_mat(0x9effff, 0.9))
+	_add_grid_line(parent, Vector3(0, 0.015, 0), Vector3(half.x * 2, 0.02, 0.18), _emissive_mat(0x9effff, 0.9))
 
 
 static func _z_tint(z: float, arena: float, blue: StandardMaterial3D, red: StandardMaterial3D, mid: StandardMaterial3D) -> StandardMaterial3D:

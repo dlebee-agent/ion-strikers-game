@@ -29,6 +29,9 @@ static func compile(def: Dictionary) -> Dictionary:
 		"name": def.get("name", ""),
 		"desc": def.get("desc", ""),
 		"arena": arena,
+		# Optional [half_x, half_z] floor extents for maps that are not
+		# square; everything defaults to the square the arena value implies.
+		"floor": def.get("floor", []),
 		"spawns": def.get("spawns", {}),
 		"pads": def.get("pads", []),
 		"theme": def.get("theme", {}),
