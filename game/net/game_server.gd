@@ -217,6 +217,10 @@ func _poll_enet() -> void:
 				print("[server] banned IP %s attempted reconnect" % ip)
 				continue
 			_sessions[peer_id] = {"peer": peer, "instance": null, "authed": false}
+			# The client holds its create/join until this arrives, so it can
+			# refuse a map mismatch before either side commits to a match.
+			_send(peer_id, Protocol.CH_HANDSHAKE,
+				Protocol.encode_hello(MapCatalog.available_maps()))
 			print("[server] peer %d connected" % peer_id)
 
 		elif event_type == ENetConnection.EVENT_DISCONNECT:
@@ -277,8 +281,16 @@ func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 			Protocol.encode_join_error("Create via the Game API."))
 		return
 
+	# A map this build cannot simulate is refused outright. Falling back to
+	# another map would leave the client rendering the one it asked for.
+	var map_id := str(msg.get("map", "parkour"))
+	if not MapCatalog.has_map(map_id):
+		_send(peer_id, Protocol.CH_HANDSHAKE,
+			Protocol.encode_join_error("This server does not have map '%s'." % map_id))
+		return
+
 	var cfg := {
-		"map_id": str(msg.get("map", "parkour")),
+		"map_id": map_id,
 		"mode": str(msg.get("mode", "classic")),
 		"rounds": int(msg.get("rounds", 10)),
 		"kills": int(msg.get("kills", 50)),

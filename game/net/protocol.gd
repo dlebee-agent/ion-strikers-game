@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 6
+const PROTOCOL_VERSION := 7
 
 const MODE_CLASSIC := 0
 const MODE_DM := 1
@@ -59,6 +59,7 @@ enum Msg {
 	CHEATS,
 	SET_CHEATS_DENIED,
 	JOIN_AUTH,
+	HELLO,
 }
 
 enum Team { TEAM_NONE = 0, TEAM_BLUE = 1, TEAM_RED = 2 }
@@ -190,6 +191,13 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["bots_move"] = b.get_u8() != 0
 			d["bot_skill"] = b.get_u8()
 			d["display_name"] = _read_string(b)
+		Msg.HELLO:
+			d["v"] = b.get_u8()
+			var map_count := b.get_u16()
+			var maps: Array[String] = []
+			for i in map_count:
+				maps.append(_read_string(b))
+			d["maps"] = maps
 		Msg.JOIN_DIRECT:
 			d["v"] = b.get_u8()
 			d["name"] = _read_string(b)
@@ -425,6 +433,22 @@ static func encode_create_game(
 	b.put_u8(1 if bots_move else 0)
 	b.put_u8(bot_skill)
 	_write_string(b, display_name)
+	return b.data_array
+
+
+# Sent by the server to every peer the moment it connects, before the peer
+# has said anything. Carries the server's protocol version and the maps it
+# can actually simulate, so a client can refuse a create or join it knows
+# will desync instead of discovering it mid-match. Clients older than the
+# HELLO message fall through their decode switch and ignore it.
+static func encode_hello(maps: Array) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.HELLO)
+	b.put_u8(0)
+	b.put_u8(PROTOCOL_VERSION)
+	b.put_u16(maps.size())
+	for m in maps:
+		_write_string(b, str(m))
 	return b.data_array
 
 

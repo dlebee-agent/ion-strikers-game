@@ -14,6 +14,8 @@ extends RefCounted
 const _ParkourMap := preload("res://maps/parkour/parkour.gd")
 const _GridArenaMap := preload("res://maps/grid_arena/grid_arena.gd")
 
+const BUILTIN_IDS: Array[String] = ["parkour", "grid_arena"]
+
 const COMMUNITY_DIR := "res://maps/community"
 const COMMUNITY_PREFIX := "community/"
 
@@ -30,6 +32,20 @@ static func builtin_definition(map_id: String) -> Dictionary:
 			return _GridArenaMap.definition()
 		_:
 			return _ParkourMap.definition()
+
+
+# Every map this build can compile or import, as ids. What the server puts in
+# its HELLO, and what both sides check an id against before trusting it.
+static func available_maps() -> Array[String]:
+	var out: Array[String] = BUILTIN_IDS.duplicate()
+	out.append_array(list_community())
+	return out
+
+
+static func has_map(map_id: String) -> bool:
+	if not is_community(map_id):
+		return BUILTIN_IDS.has(map_id)
+	return list_community().has(map_id)
 
 
 static func is_community(map_id: String) -> bool:
