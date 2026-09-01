@@ -12,6 +12,7 @@ const MeteorFx = preload("res://core/meteor_fx.gd")
 const CameraShake = preload("res://core/camera_shake.gd")
 const RagdollScript = preload("res://core/ragdoll.gd")
 const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
+const FxWarmScript = preload("res://core/fx_warm.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -35,6 +36,8 @@ var _hud: MatchHud
 var _team_panel: TeamPanel
 var _remotes: Dictionary = {}  # peer_id → RemotePawn
 var _snap_time: float = 0.0
+# Sample stamps: wall time, kept strictly increasing across a same-frame burst.
+var _sample_clock: float = 0.0
 var _last_snap_players: Array = []
 
 var _spectator: SpectatorCam
@@ -62,10 +65,30 @@ var _last_score_blue: int = 0
 var _last_score_red: int = 0
 var _last_round_num: int = 1
 
+## Loaded up front so no clip is fetched off disk mid-fight. The meteor's impact
+## borrows "died", which otherwise waits until the first time somebody dies.
+const MATCH_WARM_SFX: Array[String] = [
+	"died", "hurt", "respawn", "round_start", "first_blood", "headshot",
+]
+
+## Smallest gap allowed between two sample timestamps, so a burst that arrives
+## inside one millisecond still interpolates instead of teleporting.
+const SNAP_TIME_EPSILON := 0.002
+
 const SCOREBOARD_REFRESH := 0.25
 var _scoreboard_next_refresh: float = 0.0
 var _match_over: bool = false
 var _match_winner: int = 0
+
+## Long enough for the round card's full fade-in, hold, and fade-out, so the
+## match-over overlay never lands on top of the result it is replacing.
+const MATCH_OVER_HANDOFF := 2.9
+var _match_over_pending: bool = false
+var _outro_active: bool = false
+
+## Mirrors MatchState.ROUND_FREEZE, which the server enforces. This copy only
+## keeps the local body still so it does not fight the server's refusal.
+var _freeze_until: float = 0.0
 
 
 func _ready() -> void:
@@ -82,6 +105,10 @@ func _ready() -> void:
 		_player_names[my_init_id] = local_callsign
 
 	_build_map()
+	# Compile the FX shader variants now, while the team panel is up, rather than
+	# on the frame the first meteor is drawn.
+	FxWarmScript.warm(self)
+	Announcer.warm(MATCH_WARM_SFX)
 	_spectator = SpectatorCam.new()
 	add_child(_spectator)
 	_start_spectate_watch()
@@ -178,6 +205,7 @@ func _build_hud() -> void:
 	_hud.controls_requested.connect(_toggle_controls_card)
 	_hud.settings_requested.connect(_toggle_settings)
 	_hud.chat_submitted.connect(_on_chat_submit)
+	_hud.chat_cancelled.connect(_on_chat_cancel)
 	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
 
 	var init_mode := str(init_data.get("mode", "arena"))
@@ -368,6 +396,13 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 	pawn.weapon.special_started.connect(_on_local_special_start)
 	pawn.weapon.special_fired.connect(_on_local_special_fire)
 
+	# The new Camera3D is current the moment it enters the tree, but its
+	# transform is only written by process_input, which does not run until the
+	# next physics tick — and spawns arrive from the client poll AFTER this
+	# node's _physics_process. Place it now, or the first rendered frame of
+	# every spawn and respawn shows the camera's identity transform.
+	pawn.camera_rig.update_camera()
+
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -376,15 +411,23 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 func _physics_process(dt: float) -> void:
 	var blocked := _team_panel.is_open() or ConfirmPrompt.is_open() or _hud.is_chat_open() \
 		or _hud.is_settings_open() or GameConsole.is_open()
-	if pawn and _alive and not _in_stands and not _match_over and not blocked:
-		pawn.process_input(dt)
+	var now := Time.get_ticks_msec() / 1000.0
+	var frozen := _outro_active or now < _freeze_until
+
+	if pawn and _alive and not _in_stands and not _match_over:
+		# A blocked or frozen pawn still falls, slides to a stop, and keeps its
+		# camera pointed where the player left it. Only input reading stops.
+		if blocked or frozen:
+			pawn.process_idle(dt)
+		else:
+			pawn.process_input(dt)
 		if client:
 			client.send_state(pawn.movement.position, pawn.movement.yaw,
 				pawn.movement.pitch, pawn.movement.is_crouching,
 				pawn.movement.on_ground)
 		_sync_special_hud()
 
-	_snap_time += dt
+	_snap_time = Time.get_ticks_msec() / 1000.0
 	for pid: int in _remotes:
 		var rp: RemotePawn = _remotes[pid]
 		rp.interpolate(_snap_time)
@@ -398,13 +441,18 @@ func _physics_process(dt: float) -> void:
 			_local_ragdoll.end()
 			_local_ragdoll = null
 
-	if not _match_over and not blocked and _spectator:
-		if _in_stands:
-			_spectator.update_watch(dt, _remotes)
-			_update_spectator_panel()
-		elif not _alive:
-			_spectator.update_death_follow(dt, _remotes, _my_team)
-			_update_spectator_panel()
+	if not _match_over and _spectator:
+		if _outro_active:
+			# Ride the winning side out instead of freezing wherever the last
+			# shot left the camera.
+			_spectator.update_death_follow(dt, _remotes, _match_winner)
+		elif not blocked:
+			if _in_stands:
+				_spectator.update_watch(dt, _remotes)
+				_update_spectator_panel()
+			elif not _alive:
+				_spectator.update_death_follow(dt, _remotes, _my_team)
+				_update_spectator_panel()
 
 	if _meteor_warn_until > 0.0 and _snap_time > _meteor_warn_until:
 		_hud.show_meteor_warning(false)
@@ -419,7 +467,8 @@ func _input(event: InputEvent) -> void:
 	if not is_inside_tree():
 		return
 	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
-			or _hud.is_settings_open() or _match_over or GameConsole.is_open():
+			or _hud.is_settings_open() or _match_over or _outro_active \
+			or GameConsole.is_open():
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var motion := event as InputEventMouseMotion
@@ -573,7 +622,10 @@ func _on_local_special_fire() -> void:
 # ── Server events ────────────────────────────────────────────────────────
 
 func _on_snap(snap: Dictionary) -> void:
-	_snap_time = Time.get_ticks_msec() / 1000.0
+	# Two snapshots drained in one frame land on the same millisecond, and a
+	# zero-length span makes the interpolator snap straight to the newer sample
+	# instead of easing into it. Stamp samples on a clock that cannot repeat.
+	_sample_clock = maxf(Time.get_ticks_msec() / 1000.0, _sample_clock + SNAP_TIME_EPSILON)
 	var players: Array = snap.get("players", [])
 	_last_snap_players = players
 
@@ -611,7 +663,11 @@ func _on_snap(snap: Dictionary) -> void:
 	_hud.update_score(score_blue, score_red, round_num, snap_mode, snap_kill_target,
 		round_state, _win_rounds, blue_alive, red_alive, _clock_text())
 
-	if round_state == Protocol.RS_OVER and (not _match_over or scores_changed):
+	# The server flips round_state to RS_OVER in the same tick it sends
+	# ROUND_END, so without this guard the next snapshot would slam the overlay
+	# up before the round card had a chance to play.
+	if round_state == Protocol.RS_OVER and not _match_over_pending \
+			and (not _match_over or scores_changed):
 		var winner := Protocol.TEAM_BLUE if score_blue >= score_red else Protocol.TEAM_RED
 		if score_blue == score_red:
 			winner = 0
@@ -666,7 +722,7 @@ func _on_snap(snap: Dictionary) -> void:
 			if p_team != rp.team:
 				rp.set_team_value(p_team)
 			var was_alive := rp.alive
-			rp.push_snapshot(p, _snap_time)
+			rp.push_snapshot(p, _sample_clock)
 			# The alive flag only updates during interpolate(), but the
 			# ragdoll must be seeded the moment the death snapshot arrives
 			# so the body is still in the pose it died in.
@@ -680,7 +736,9 @@ func _on_snap(snap: Dictionary) -> void:
 			add_child(rp)
 			var rp_name: String = _player_names.get(pid, "Player %d" % pid)
 			rp.setup(pid, rp_name, p_team)
-			rp.push_snapshot(p, _snap_time)
+			# Joining mid-round means their death already happened off screen.
+			rp.adopt_initial_alive(p_alive)
+			rp.push_snapshot(p, _sample_clock)
 			_remotes[pid] = rp
 
 	var to_remove: Array[int] = []
@@ -772,7 +830,11 @@ func _on_tracer(msg: Dictionary) -> void:
 
 func _on_round_start(msg: Dictionary) -> void:
 	_hud.hide_round_end()
-	_hud.show_banner("ROUND %d" % int(msg.get("round_num", 1)), MatchHud.WHITE)
+	_hud.show_banner("ROUND %d" % int(msg.get("round_num", 1)), MatchHud.WHITE,
+		"GET READY")
+	# The respawn for this round already arrived, so the pawn exists and this
+	# only has to hold it still.
+	_freeze_until = Time.get_ticks_msec() / 1000.0 + MatchState.ROUND_FREEZE
 	if Announcer:
 		Announcer.round_start()
 
@@ -790,7 +852,7 @@ func _on_round_end(msg: Dictionary) -> void:
 	var reason := int(msg.get("reason", Protocol.END_ELIMINATION))
 	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over, reason)
 	if match_over:
-		_enter_match_over(winner)
+		_queue_match_over(winner)
 	if Announcer:
 		Announcer.round_end(winner, match_over, match_point)
 
@@ -802,11 +864,14 @@ func _on_match_over(msg: Dictionary) -> void:
 	if msg.has("score_red"):
 		_last_score_red = int(msg.get("score_red", _last_score_red))
 	_apply_match_over_stats(msg.get("stats", []))
-	_enter_match_over(winner)
-	if not _hud.is_round_end_visible():
+	# ROUND_END normally lands first and has already put the card up; this
+	# message is the one carrying the stats. Only raise the card here when the
+	# match ended some other way (a forfeit, or joining into a decided match).
+	if not _hud.is_round_end_visible() and not _match_over_pending:
 		_hud.show_round_end(winner, _last_score_blue, _last_score_red, 0, true)
 		if Announcer:
 			Announcer.match_over(winner)
+	_queue_match_over(winner)
 
 
 func _on_respawn(msg: Dictionary) -> void:
@@ -837,6 +902,11 @@ func _on_chat(msg: Dictionary) -> void:
 func _on_chat_submit(text: String, team_only: bool) -> void:
 	if client:
 		client.send_chat(text, team_only)
+	if not _match_over and not _in_stands:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _on_chat_cancel() -> void:
 	if not _match_over and not _in_stands:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -1051,7 +1121,44 @@ func _mark_input_handled() -> void:
 		vp.set_input_as_handled()
 
 
+# The round card and the match-over overlay used to be raised in the same frame,
+# so the result you needed to read was covered before it had finished drawing.
+# Play the card, hold the camera on the winning side, then hand off.
+func _queue_match_over(winner: int) -> void:
+	if _match_over or _match_over_pending:
+		return
+	_match_over_pending = true
+	_match_winner = winner
+	_begin_match_outro()
+
+	await get_tree().create_timer(MATCH_OVER_HANDOFF).timeout
+	if not is_inside_tree() or _match_over:
+		return
+	_match_over_pending = false
+	_enter_match_over(winner)
+
+
+func _begin_match_outro() -> void:
+	_outro_active = true
+	if pawn:
+		pawn.cancel_special()
+		pawn.weapon.special_armed = false
+		if _alive:
+			# The outro can fall back to an arena orbit, and an orbit that finds
+			# a headless pair of viewmodel arms is worse than no orbit at all.
+			pawn.set_fp_arms_visible(false)
+			pawn.set_mannequin_visible(true)
+	if _spectator:
+		# TEAMMATE follow against the winning team: it flies to a living winner,
+		# or drops to the arena orbit when the local player is the last one up.
+		_spectator.start_teammate_follow()
+	_hud.hide_spectator_panel()
+
+
 func _enter_match_over(winner: int) -> void:
+	_match_over_pending = false
+	_outro_active = false
+	_freeze_until = 0.0
 	_match_winner = winner
 	if _match_over:
 		_hud.present_match_over(winner, _last_score_blue, _last_score_red, _mode)

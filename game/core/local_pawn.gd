@@ -418,6 +418,28 @@ func process_input(dt: float) -> void:
 
 	camera_rig.update_camera()
 
+# Runs the body without reading input, for while chat, the console, or a menu owns
+# the keyboard. Physics has to keep going or opening chat mid-jump parks you in the
+# air, and the camera has to keep tracking or the view locks up with it. Crouch is
+# held rather than released, so ducking into chat does not stand you up into fire.
+func process_idle(dt: float) -> void:
+	weapon.update(dt)
+
+	if camera_rig.mode == CameraRig.Mode.PREVIEW:
+		_pose_for_preview()
+		camera_rig.update_camera()
+		return
+
+	movement.update(dt, 0.0, 0.0, false, movement.is_crouching, false, _world)
+	anim_driver.update_from_movement(movement)
+
+	if _mannequin_instance:
+		_mannequin_instance.global_position = movement.position
+		_mannequin_instance.rotation_degrees.y = movement.yaw + BODY_YAW_OFFSET
+
+	camera_rig.update_camera()
+
+
 # The preview orbit starts on +Z and the rig is authored facing +Z, so leaving the
 # body unrotated turns it toward the camera instead of showing you its back.
 func _pose_for_preview() -> void:

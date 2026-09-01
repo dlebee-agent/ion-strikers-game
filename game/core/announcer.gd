@@ -108,6 +108,13 @@ func play_clip(key: String) -> void:
 	_announcer_player.play()
 
 
+## Pulls clips into the cache ahead of time. _load_audio is a synchronous disk
+## read plus a decode, and doing it on the frame a sound is wanted is a hitch.
+func warm(keys: Array[String]) -> void:
+	for key in keys:
+		_load_audio(key)
+
+
 func play_sfx(key: String, volume_db: float = 0.0) -> void:
 	var stream := _load_audio(key)
 	if stream == null:

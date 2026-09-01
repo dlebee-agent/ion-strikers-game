@@ -90,13 +90,19 @@ func blocked(from: Vector3, to: Vector3) -> bool:
 ## Highest surface under the footprint that is no higher than `ceiling`.
 ## Doubles as the step-up target and the landing height, since both ask the same
 ## question: what is the highest thing within reach of these feet?
-func surface_at(x: float, z: float, ceiling: float) -> float:
+func surface_at(x: float, z: float, ceiling: float, radius := BODY_RADIUS) -> float:
 	if world == null:
 		return -INF
-	# A thin pad the width of the body, dropped from the ceiling. Sweeping the
-	# footprint rather than reading bounding box tops is what lets this land
-	# partway up a ramp instead of at its peak.
-	var half := Vector3(BODY_RADIUS, PAD_HALF_HEIGHT, BODY_RADIUS)
+	# A thin pad, dropped from the ceiling. Sweeping the footprint rather than
+	# reading bounding box tops is what lets this land partway up a ramp instead
+	# of at its peak.
+	#
+	# The radius is a parameter because two different questions get asked of it.
+	# The body-width pad answers "is anything holding me up", which is what keeps
+	# a bot on a ledge it is only half standing on. A narrow pad answers "is the
+	# surface under me", which is what climbing has to be judged against — see
+	# BotDirector._apply_motion.
+	var half := Vector3(radius, PAD_HALF_HEIGHT, radius)
 	var basement := world.bounds.position.y - 1.0
 	world.trace_box(Vector3(x, ceiling + half.y, z), Vector3(x, basement, z), half, _probe)
 	if not _probe.hit() or _probe.start_solid:

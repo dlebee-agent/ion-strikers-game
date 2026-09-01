@@ -12,7 +12,10 @@ const FLY_BOOST := 2.2
 const PITCH_LIMIT := 89.0
 
 const SPEC_FLY_SPEED := 26.0
-const SPEC_FLY_MIN := 0.35
+# The floor matters more than the speed: two teammates standing together are a
+# metre apart, and without a minimum travel time the switch reads as a hard cut
+# rather than a move. 0.6s is long enough to see that the camera went somewhere.
+const SPEC_FLY_MIN := 0.6
 const SPEC_FLY_MAX := 1.2
 
 const DEATH_PULLBACK := 2.6
@@ -140,6 +143,13 @@ func start_death_ragdoll(body_pos: Vector3, eye_pos: Vector3,
 
 
 func start_teammate_follow() -> void:
+	# Leaving a death follow has to give the corpse back: the death camera hides
+	# the local mannequin until it has pulled far enough away, and nothing else
+	# turns it on again.
+	if _death_mannequin and is_instance_valid(_death_mannequin):
+		_death_mannequin.visible = true
+	_death_ragdoll = null
+	_death_mannequin = null
 	follow_state = FollowState.TEAMMATE
 	_fly_active = false
 	_target_id = 0
@@ -182,7 +192,14 @@ func toggle_view_mode() -> void:
 	else:
 		view_mode = ViewMode.FREE_FLY
 		_clear_hidden()
+		_fly_active = false
+		# Free-fly reads _pos and the euler pair, so hand it back the transform
+		# the FPV view ended on instead of a stale one from before the switch.
+		_pos = _camera.global_position
+		_yaw = rad_to_deg(_camera.rotation.y)
+		_pitch = clampf(rad_to_deg(_camera.rotation.x), -PITCH_LIMIT, PITCH_LIMIT)
 	_fpv_inited = false
+	_last_target_id = 0
 
 
 func cycle_target(dir: int, remotes: Dictionary, team_filter: int) -> void:
@@ -360,15 +377,40 @@ func _update_watch_fpv(dt: float, remotes: Dictionary) -> void:
 	if _target_id == 0 or not all.has(_target_id):
 		_target_id = all[0] if not all.is_empty() else 0
 
+	# Same arc the teammate follow uses. Cutting straight into the next player's
+	# eyes gives no sense of where they are relative to the last one, and coming
+	# out of free-fly it is not even clear the view changed at all.
+	if _target_id != _last_target_id or not _fpv_inited:
+		_last_target_id = _target_id
+		_fpv_inited = true
+		if _target_id != 0:
+			_fly_active = true
+			_fly_from = _camera.global_position
+			_fly_from_rot = _camera.quaternion
+			_fly_t = 0.0
+			_fly_dur = 0.0
+			_fly_arc = 0.0
+		else:
+			_fly_active = false
+
 	if _target_id != 0 and remotes.has(_target_id):
 		var rp: RemotePawn = remotes[_target_id]
 		var eye := rp.sample_eye()
-		_camera.global_position = Vector3(eye["x"], eye["y"] + eye["eye_h"], eye["z"])
-		_camera.rotation_degrees = Vector3(eye["pitch"], eye["yaw"], 0.0)
-		_set_hidden(_target_id, remotes)
+		var dest := Vector3(eye["x"], eye["y"] + eye["eye_h"], eye["z"])
+		if _fly_active:
+			_do_fly_between(dt, dest, eye["pitch"], eye["yaw"], remotes)
+		else:
+			_camera.global_position = dest
+			_camera.rotation_degrees = Vector3(eye["pitch"], eye["yaw"], 0.0)
+			_set_hidden(_target_id, remotes)
 	else:
+		_fly_active = false
 		_clear_hidden()
-		_camera.global_position = Vector3(0.0, _arena_size * 1.15, 0.01)
+		# Held off the vertical: looking straight down with UP as the up vector
+		# leaves look_at one cross product away from collapsing, and Godot hands
+		# back an identity basis when it does.
+		_camera.global_position = Vector3(
+			0.0, _arena_size * 1.15, _arena_size * 0.45)
 		_camera.look_at(Vector3.ZERO, Vector3.UP)
 
 

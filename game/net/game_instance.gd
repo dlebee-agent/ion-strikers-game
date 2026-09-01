@@ -30,14 +30,9 @@ var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
-## Half extents of the map's floor, which is square on every map but grid
-## arena. Anything beyond it horizontally is off the map.
-var _bounds_half := Vector2(28.0, 28.0)
-
-## Below this a pawn has left the floor behind and is only going to keep
-## falling: the floor slab tops out at y=0 and its underside sits at y=-2,
-## so nothing that is still on the map is ever down here.
-const VOID_Y := -6.0
+## How far below the lowest brush a pawn has to get before it has left the
+## level. Far enough that standing in the basement of a tall map is not a death.
+const VOID_DROP := 8.0
 ## How far past the floor edge a pawn may be before it counts as off the
 ## map. The perimeter walls stand on that edge, so the only way to be out
 ## here is to have left over the top of one.
@@ -82,6 +77,7 @@ const DM_RESPAWN_MS := 5000.0
 
 ## Lobby is released after this long with no human participants. Bots do not count.
 const EMPTY_HUMAN_TTL := 300.0
+
 # Negative while any human is present; otherwise the instance time they left (0 at create).
 var _empty_since: float = 0.0
 
@@ -129,7 +125,6 @@ func _setup_builtin_map() -> void:
 	world = MapBuilder.build_world(compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
 	arena_size = compiled.get("arena", 28.0)
-	_bounds_half = MapBuilder.floor_half(compiled)
 
 
 func _setup_community_map() -> void:
@@ -137,6 +132,12 @@ func _setup_community_map() -> void:
 	if not level.ok():
 		push_error("[server] %s did not import (%s); falling back to parkour" % [
 			map_id, ", ".join(level.warnings)])
+		# Tell clients the map that is actually being simulated. Leaving the
+		# requested id here sent them off to render a level the server did not
+		# have, and every body in the match then walked on geometry nobody could
+		# see: bots climbing stairs that were not there, players clipping walls
+		# that were. A visibly wrong map beats an invisibly wrong one.
+		map_id = "parkour"
 		_setup_builtin_map()
 		return
 	for w: String in level.warnings:
@@ -144,7 +145,6 @@ func _setup_community_map() -> void:
 	world = level.world
 	spawns = level.spawns
 	arena_size = level.arena
-	_bounds_half = Vector2(level.arena, level.arena)
 	print("[server] %s: %d brushes, %d spawns" % [
 		map_id, world.brush_count(), level.spawn_count()])
 
@@ -292,6 +292,8 @@ func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched
 # ── Combat ───────────────────────────────────────────────────────────────
 
 func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> void:
+	if _round_frozen():
+		return
 	if not participants.has(peer_id) or not pawns.has(peer_id):
 		return
 	var shooter: Participant = participants[peer_id]
@@ -351,6 +353,8 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 
 
 func handle_melee(peer_id: int, lag_ms: int) -> void:
+	if _round_frozen():
+		return
 	if not participants.has(peer_id) or not pawns.has(peer_id):
 		return
 	var shooter: Participant = participants[peer_id]
@@ -387,6 +391,8 @@ func handle_melee(peer_id: int, lag_ms: int) -> void:
 
 
 func handle_special_start(peer_id: int) -> void:
+	if _round_frozen():
+		return
 	if not participants.has(peer_id) or not pawns.has(peer_id):
 		return
 	var p: Participant = participants[peer_id]
@@ -538,14 +544,22 @@ func _tick_match(_dt: float) -> void:
 # The height test is the one that catches everything: whatever route took
 # them off the map, they end up under it. The horizontal test is for a pawn
 # flung past the wall by a blast while still level with the floor.
+#
+# Both are measured from the brush world rather than fixed numbers, because an
+# imported level puts its floor wherever the mapper did: fy_snow's is seven
+# metres down, and the level is not centred on the origin.
 func _check_out_of_bounds() -> void:
+	if world == null:
+		return
+	var floor_y := world.bounds.position.y - VOID_DROP
+	var inside := world.bounds.grow(VOID_MARGIN)
 	for pid: int in pawns:
 		var pawn: ServerPawn = pawns[pid]
 		if not pawn.alive:
 			continue
-		if pawn.position.y > VOID_Y \
-				and absf(pawn.position.x) <= _bounds_half.x + VOID_MARGIN \
-				and absf(pawn.position.z) <= _bounds_half.y + VOID_MARGIN:
+		if pawn.position.y > floor_y \
+				and pawn.position.x >= inside.position.x and pawn.position.x <= inside.end.x \
+				and pawn.position.z >= inside.position.z and pawn.position.z <= inside.end.z:
 			continue
 		# Routed through the damage path so the death counts, the kill feed
 		# names the void, and a deathmatch respawn is scheduled, exactly as
@@ -688,6 +702,7 @@ func _start_round() -> void:
 	match_state.round_ends_at = 0.0
 	match_state.round_had_blue = false
 	match_state.round_had_red = false
+	match_state.freeze_until = _now + MatchState.ROUND_FREEZE
 	match_state.first_blood_done = false
 	match_state.match_point_announced = false
 	match_state.pending_meteor = {}
@@ -814,8 +829,12 @@ func _tick_bots(dt: float) -> void:
 		if not pawn.alive:
 			continue
 
+		# The round-start freeze is a server rule, so bots obey it here rather
+		# than being trusted to. A frozen bot still thinks and aims; it does
+		# not walk or pull the trigger.
+		var frozen := _round_frozen()
 		var actions := bot_director.update_bot(p, pawn, participants, pawns,
-			bots_shoot, bots_move, true, _now, dt)
+			bots_shoot and not frozen, bots_move and not frozen, true, _now, dt)
 
 		if actions.get("special_start", false):
 			handle_special_start(pid)
@@ -1081,6 +1100,10 @@ func _manage_bots() -> void:
 			_kill_pawn(bid, Protocol.CAUSE_VOID, 0, true)
 			participants.erase(bid)
 			pawns.erase(bid)
+
+
+func _round_frozen() -> bool:
+	return _now < match_state.freeze_until
 
 
 func _is_protected(pawn: ServerPawn) -> bool:

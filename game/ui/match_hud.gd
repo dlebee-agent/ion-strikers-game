@@ -66,6 +66,7 @@ signal team_menu_requested
 signal controls_requested
 signal settings_requested
 signal chat_submitted(text: String, team_only: bool)
+signal chat_cancelled()
 
 const KILL_FEED_MAX := 6
 const KILL_FEED_LIFETIME := 5.0
@@ -877,10 +878,18 @@ func _on_chat_submit(text: String) -> void:
 func _on_chat_input_gui(event: InputEvent) -> void:
 	if event is InputEventKey:
 		var key := event as InputEventKey
-		if key.pressed and not key.echo and key.keycode == KEY_TAB:
+		if not key.pressed or key.echo:
+			return
+		if key.keycode == KEY_TAB:
 			_chat_team_only = not _chat_team_only
 			_sync_chat_bar()
 			_chat_input.accept_event()
+		# ESC has to be caught here, not in the scene's _unhandled_input: the
+		# focused LineEdit consumes the key before it ever gets that far.
+		elif key.keycode == KEY_ESCAPE:
+			close_chat()
+			_chat_input.accept_event()
+			chat_cancelled.emit()
 
 
 func _sync_chat_bar() -> void:

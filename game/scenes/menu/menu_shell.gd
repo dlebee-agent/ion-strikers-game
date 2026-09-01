@@ -15,9 +15,10 @@ const BOT_CTRL_H := 44
 const SKILL_BLURBS: Array[String] = ["relaxed", "fair fight", "sharp", "brutal"]
 
 
-# Built-in maps plus whatever .map files are sitting in maps/community. The
-# community ones are imported to read their name, which also surfaces a broken
-# map here in the lobby rather than at the start of a match.
+# Built-in maps plus whatever levels are sitting in maps/community, .map source
+# or compiled .bsp alike. The community ones are imported to read their name,
+# which also surfaces a broken map here in the lobby rather than at the start of
+# a match.
 static func map_entries() -> Array[Dictionary]:
 	var out: Array[Dictionary] = BUILTIN_MAPS.duplicate()
 	for id: String in MapCatalog.list_community():
@@ -75,7 +76,11 @@ var _foot_binds: Label
 var _callsign: String = ""
 var _blip_t: float = 0.0
 
-var selected_hosting: String = "hosted"
+# Players on an exported build default to the public servers. A source build
+# defaults to LAN, because the point of running from source is to test the
+# server code on this disk — and Hosted silently hands you a production server
+# running whatever was last deployed, with no sign in the UI that it did.
+var selected_hosting: String = "lan" if OS.has_feature("editor") else "hosted"
 var selected_mode: String = "arena"
 var selected_map: String = "parkour"
 var selected_rounds: int = 10
@@ -508,7 +513,7 @@ func _build_create() -> void:
 		_make_opt("LAN", "This machine. Others can join your network.", "lan"),
 		_make_opt("Hosted", "Public lobby on the Ion Strikers servers.", "hosted"),
 	]
-	_hosting_btns[1].set_meta("active", true)
+	_hosting_btns[0 if selected_hosting == "lan" else 1].set_meta("active", true)
 	for b in _hosting_btns:
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		hosting_row.add_child(b)
