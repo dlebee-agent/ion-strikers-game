@@ -22,6 +22,7 @@ func _initialize() -> void:
 	_dm_has_no_round_clock()
 	_dm_match_clock_ends_it()
 	_clock_counts_down()
+	_unknown_mode_is_arena()
 
 	print("")
 	print("FAILURES: %d" % failed)
@@ -31,7 +32,7 @@ func _initialize() -> void:
 # ── cases ────────────────────────────────────────────────────────────────
 
 func _wipe_ends_round() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_RED)
 	inst.tick(DT)
@@ -43,7 +44,7 @@ func _wipe_ends_round() -> void:
 
 
 func _leaving_ends_round() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_RED)
 	inst.tick(DT)
@@ -56,7 +57,7 @@ func _leaving_ends_round() -> void:
 
 
 func _lone_team_waits() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	# The clock has to be running even with nobody to play against: a
 	# stopped one is what a player reads as a broken game.
@@ -80,7 +81,7 @@ func _lone_team_waits() -> void:
 
 
 func _clock_decides_on_who_is_left() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_BLUE)
 	_join(inst, 3, Protocol.TEAM_RED)
@@ -97,7 +98,7 @@ func _clock_decides_on_who_is_left() -> void:
 
 
 func _clock_draw_when_level() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_RED)
 	_run(inst, MatchState.ROUND_TIME_S + 1.0)
@@ -112,9 +113,9 @@ func _dm_has_no_round_clock() -> void:
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_RED)
 	_run(inst, MatchState.ROUND_TIME_S + 5.0)
-	_expect("dm", _ends.is_empty(), "no round ends on the classic round clock")
+	_expect("dm", _ends.is_empty(), "no round ends on the arena round clock")
 	_expect("dm", inst.match_state.round_state == Protocol.RS_ACTIVE, "still running")
-	print("  %-10s %d rounds ended past a classic round length" % ["dm", _ends.size()])
+	print("  %-10s %d rounds ended past an arena round length" % ["dm", _ends.size()])
 	_free(inst)
 
 
@@ -130,12 +131,12 @@ func _dm_match_clock_ends_it() -> void:
 
 
 func _clock_counts_down() -> void:
-	var inst := _match("classic")
+	var inst := _match("arena")
 	_join(inst, 1, Protocol.TEAM_BLUE)
 	_join(inst, 2, Protocol.TEAM_RED)
 	inst.tick(DT)
 	var first := _snap_clock(inst)
-	_expect("countdown", first[1] == Protocol.CLOCK_DOWN, "classic clock counts down")
+	_expect("countdown", first[1] == Protocol.CLOCK_DOWN, "arena clock counts down")
 	_expect("countdown", first[0] <= int(MatchState.ROUND_TIME_S),
 		"starts at the round length")
 	_run(inst, 10.0)
@@ -143,6 +144,22 @@ func _clock_counts_down() -> void:
 	_expect("countdown", later[0] < first[0],
 		"reads lower ten seconds in (%d then %d)" % [first[0], later[0]])
 	print("  %-10s %d then %d, mode %d" % ["countdown", first[0], later[0], later[1]])
+	_free(inst)
+
+
+# The Game API passes a mode string straight through from whoever called
+# it, so a value that is neither mode has to land somewhere definite. It
+# becomes arena and plays as arena: this mode used to be called "classic",
+# and a caller still saying that must not get a half-configured match.
+func _unknown_mode_is_arena() -> void:
+	var inst := _match("classic")
+	_expect("old mode", inst.mode == "arena", "an unknown mode reads as arena")
+	_join(inst, 1, Protocol.TEAM_BLUE)
+	_join(inst, 2, Protocol.TEAM_RED)
+	inst.tick(DT)
+	_kill(inst, 2)
+	inst.tick(DT)
+	_ended("old mode", Protocol.TEAM_BLUE, Protocol.END_ELIMINATION)
 	_free(inst)
 
 

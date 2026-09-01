@@ -22,7 +22,7 @@ func _initialize() -> void:
 	# The score bar clock rides the snap, so it has to survive the trip
 	# alongside the player list rather than only on its own.
 	var snap := Protocol.decode(Protocol.encode_snap(
-		3, 4, 2, Protocol.RS_ACTIVE, Protocol.MODE_CLASSIC, 50, 10, [],
+		3, 4, 2, Protocol.RS_ACTIVE, Protocol.MODE_ARENA, 50, 10, [],
 		95, Protocol.CLOCK_DOWN))
 	_check(int(snap.get("clock_s", -1)) == 95, "snap carries the clock")
 	_check(int(snap.get("clock_mode", -1)) == Protocol.CLOCK_DOWN, "snap carries the clock mode")

@@ -19,7 +19,7 @@ var _world: CollisionWorld = null
 # Reused by every tracer, so a firefight allocates nothing.
 var _shot_trace := TraceResult.new()
 var _map_id: String = "parkour"
-var _mode: String = "classic"
+var _mode: String = "arena"
 var _my_team: int = 0
 var _in_stands := true
 var _alive := false
@@ -73,7 +73,7 @@ func _ready() -> void:
 	AudioMix.fade_out_keep_place(400.0)
 
 	_map_id = str(init_data.get("map", "parkour"))
-	_mode = str(init_data.get("mode", "classic"))
+	_mode = str(init_data.get("mode", "arena"))
 	_win_rounds = int(init_data.get("win_rounds", 10))
 	_max_spectators = int(init_data.get("max_spectators", 0))
 	client = game_client
@@ -180,7 +180,7 @@ func _build_hud() -> void:
 	_hud.chat_submitted.connect(_on_chat_submit)
 	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
 
-	var init_mode := str(init_data.get("mode", "classic"))
+	var init_mode := str(init_data.get("mode", "arena"))
 	var score_blue := int(init_data.get("score_blue", 0))
 	var score_red := int(init_data.get("score_red", 0))
 	var round_num := int(init_data.get("round_num", 1))
@@ -574,7 +574,7 @@ func _on_snap(snap: Dictionary) -> void:
 	var round_num := int(snap.get("round_num", 1))
 	var round_state := int(snap.get("round_state", 0))
 	var mode_int := int(snap.get("mode", 0))
-	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "classic"
+	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "arena"
 	var snap_kill_target := int(snap.get("kill_target", 50))
 	_win_rounds = int(snap.get("win_rounds", _win_rounds))
 	_clock_s = int(snap.get("clock_s", _clock_s))

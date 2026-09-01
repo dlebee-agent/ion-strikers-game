@@ -19,7 +19,7 @@ const END_FORFEIT := 2
 const CLOCK_UP := 0
 const CLOCK_DOWN := 1
 
-const MODE_CLASSIC := 0
+const MODE_ARENA := 0
 const MODE_DM := 1
 
 const PFLG_ALIVE := 1

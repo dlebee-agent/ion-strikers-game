@@ -1,7 +1,7 @@
 class_name RoundState
 extends RefCounted
 
-## Classic mode only. DM skips this entirely.
+## Arena mode only. DM skips this entirely.
 
 var round_id: String
 var round_num: int

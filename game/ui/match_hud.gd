@@ -533,7 +533,7 @@ func update_score(blue: int, red: int, round_num: int, mode: String, kill_target
 		round_state: int, win_rounds: int = 10,
 		blue_alive: int = 0, red_alive: int = 0, clock: String = "") -> void:
 	_score_bar.set_scores(blue, red)
-	_score_bar.set_alive(blue_alive, red_alive, mode == "classic")
+	_score_bar.set_alive(blue_alive, red_alive, mode == "arena")
 
 	if mode == "dm":
 		_score_bar.set_center("DEATHMATCH", clock, "FIRST TO %d" % kill_target)

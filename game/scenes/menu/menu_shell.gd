@@ -76,7 +76,7 @@ var _callsign: String = ""
 var _blip_t: float = 0.0
 
 var selected_hosting: String = "hosted"
-var selected_mode: String = "classic"
+var selected_mode: String = "arena"
 var selected_map: String = "parkour"
 var selected_rounds: int = 10
 var selected_kills: int = 50
@@ -520,7 +520,7 @@ func _build_create() -> void:
 	var mode_row := HBoxContainer.new()
 	mode_row.add_theme_constant_override("separation", 10)
 	_mode_btns = [
-		_make_opt("Classic", "First to 10 rounds · no respawn", "classic"),
+		_make_opt("Arena", "First to 10 rounds · no respawn", "arena"),
 		_make_opt("Deathmatch", "Respawn 5s · first to 50 kills", "dm"),
 	]
 	_mode_btns[0].set_meta("active", true)
@@ -700,7 +700,7 @@ func _build_create() -> void:
 	var sum_m := MarginContainer.new()
 	sum_m.add_theme_constant_override("margin_top", 8)
 	sum_m.add_theme_constant_override("margin_bottom", 14)
-	sum_mode = MenuLook.body("Classic · Parkour Yard", 15, MenuLook.INK)
+	sum_mode = MenuLook.body("Arena · Parkour Yard", 15, MenuLook.INK)
 	sum_mode.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sum_m.add_child(sum_mode)
 	bv.add_child(sum_m)
@@ -1207,23 +1207,23 @@ func _on_skill_selected(index: int) -> void:
 
 
 func _refresh_brief() -> void:
-	var classic := selected_mode == "classic"
+	var is_arena := selected_mode == "arena"
 	var map_name := "Parkour Yard"
 	for m in map_entries():
 		if str(m["id"]) == selected_map:
 			map_name = str(m["name"])
 			break
-	sum_mode.text = ("%s · %s" % ["Classic" if classic else "Deathmatch", map_name])
-	sum_limit.text = ("first to %d" % selected_rounds) if classic else ("first to %d kills" % selected_kills)
+	sum_mode.text = ("%s · %s" % ["Arena" if is_arena else "Deathmatch", map_name])
+	sum_limit.text = ("first to %d" % selected_rounds) if is_arena else ("first to %d kills" % selected_kills)
 	sum_cap.text = str(selected_cap)
 	sum_spec.text = "+%d" % selected_spec
 	brief_bots.text = ("On · %s" % BotSkill.label_for(BotSkill.from_index(selected_bot_skill))) if selected_bots else "Off"
 	brief_bots_shoot.text = "Yes" if selected_bots_shoot else "No"
 	brief_bots_move.text = "Yes" if selected_bots_move else "No"
 	sum_total.text = "%d + %d = %d" % [selected_cap, selected_spec, selected_cap + selected_spec]
-	rounds_label.text = ("ROUNDS TO WIN" if classic else "KILLS TO WIN")
-	rounds_row.visible = classic
-	kills_row.visible = not classic
+	rounds_label.text = ("ROUNDS TO WIN" if is_arena else "KILLS TO WIN")
+	rounds_row.visible = is_arena
+	kills_row.visible = not is_arena
 	if _skill_wrap:
 		_skill_wrap.visible = selected_bots
 	var show_dev := DevMode.active and selected_bots
@@ -1285,7 +1285,7 @@ func _make_lobby_row(game: Dictionary) -> Control:
 	var name_text := str(game.get("name", "")).strip_edges()
 	if name_text.is_empty():
 		name_text = str(game.get("game_id", "lobby"))
-	var mode_text := "Classic" if str(game.get("mode", "")) != "dm" else "Deathmatch"
+	var mode_text := "Arena" if str(game.get("mode", "")) != "dm" else "Deathmatch"
 	var players := "%d/%d" % [int(game.get("humans", 0)), int(game.get("max", 0))]
 	var specs := "%d/%d" % [int(game.get("spectators", 0)), int(game.get("spec_max", 0))]
 	var row := _join_row(false, [

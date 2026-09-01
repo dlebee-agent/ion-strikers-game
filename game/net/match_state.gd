@@ -4,7 +4,7 @@ extends RefCounted
 const ROUND_END_DELAY := 3.5
 const DM_RESPAWN_MS := 5000.0
 
-## How long a classic round runs before it is decided on who is left
+## How long an arena round runs before it is decided on who is left
 ## standing. Deathmatch has no round clock: everyone respawns there, so a
 ## round that could only ever end on a timer is just the match itself.
 const ROUND_TIME_S := 120.0
@@ -24,7 +24,7 @@ const METEOR_RADIUS := 5.0
 const METEOR_VERT := 3.5
 
 var match_id: String
-var mode: String = "classic"
+var mode: String = "arena"
 var win_rounds: int = 10
 var kill_target: int = 50
 var score_blue: int = 0

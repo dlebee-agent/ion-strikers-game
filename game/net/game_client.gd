@@ -227,7 +227,7 @@ func _on_hello(msg: Dictionary) -> void:
 func _send_create_game() -> void:
 	var buf := Protocol.encode_create_game(
 		str(_create_settings.get("map", "parkour")),
-		str(_create_settings.get("mode", "classic")),
+		str(_create_settings.get("mode", "arena")),
 		int(_create_settings.get("rounds", 10)),
 		int(_create_settings.get("kills", 50)),
 		int(_create_settings.get("max_players", 12)),

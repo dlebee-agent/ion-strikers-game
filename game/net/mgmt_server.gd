@@ -123,7 +123,7 @@ func _handle_create(peer: StreamPeerTCP, msg: Dictionary) -> void:
 
 	var cfg := {
 		"map_id": map_id,
-		"mode": str(msg.get("mode", "classic")),
+		"mode": str(msg.get("mode", "arena")),
 		"rounds": int(msg.get("rounds", 10)),
 		"kills": int(msg.get("kills", 50)),
 		"max_players": int(msg.get("max_players", 12)),

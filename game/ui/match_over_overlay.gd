@@ -28,7 +28,7 @@ func _init() -> void:
 func present(winner: int, score_blue: int, score_red: int, mode: String) -> void:
 	var blue_win := winner == Protocol.TEAM_BLUE
 	var accent := MenuLook.CY if blue_win else MenuLook.RD
-	var mode_label := "DEATHMATCH" if mode == "dm" else "CLASSIC"
+	var mode_label := "DEATHMATCH" if mode == "dm" else "ARENA"
 	var unit := "kills" if mode == "dm" else "rounds"
 
 	_kicker.text = MenuLook.tracked("%s · MATCH OVER" % mode_label)

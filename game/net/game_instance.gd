@@ -90,7 +90,11 @@ func _init(cfg: Dictionary = {}) -> void:
 	game_id = cfg.get("game_id", _gen_id())
 	display_name = cfg.get("display_name", "")
 	map_id = cfg.get("map_id", "parkour")
-	mode = cfg.get("mode", "classic")
+	# Anything that is not deathmatch is arena. The Game API hands the create
+	# paths whatever mode string it was given, so a stray value — an older
+	# client's "classic", a typo — would otherwise build a match that half
+	# behaves like one mode and half like the other.
+	mode = "dm" if str(cfg.get("mode", "arena")) == "dm" else "arena"
 	win_rounds = cfg.get("rounds", 10)
 	kill_target = cfg.get("kills", 50)
 	max_players = cfg.get("max_players", 12)
@@ -485,7 +489,7 @@ func build_snap() -> PackedByteArray:
 		}
 		players.append(entry)
 
-	var mode_int := Protocol.MODE_DM if mode == "dm" else Protocol.MODE_CLASSIC
+	var mode_int := Protocol.MODE_DM if mode == "dm" else Protocol.MODE_ARENA
 	var clock := _clock_reading()
 	return Protocol.encode_snap(
 		match_state.score_blue, match_state.score_red, match_state.round_num,
@@ -524,7 +528,7 @@ func _tick_match(_dt: float) -> void:
 	if mode == "dm":
 		_check_dm_time()
 	else:
-		_check_classic_round()
+		_check_arena_round()
 
 
 # Falling off the map kills rather than dropping forever. Grid arena's
@@ -575,11 +579,11 @@ func _check_dm_time() -> void:
 	_broadcast_match_over(winner)
 
 
-# A classic round ends three ways: one side is wiped out, one side empties
+# An arena round ends three ways: one side is wiped out, one side empties
 # because everyone on it left or went to spectate, or the clock runs out.
 # The middle one matters as much as the first: a round waiting on a team
 # with nobody left to kill would sit there forever.
-func _check_classic_round() -> void:
+func _check_arena_round() -> void:
 	# The clock runs from the moment the round does, whoever is here. A
 	# number that only starts once the lobby fills reads as a broken one.
 	if match_state.round_ends_at <= 0.0:
@@ -692,7 +696,7 @@ func _start_round() -> void:
 	# Rebalance before redeploying so bots added for this round spawn with everyone else.
 	_manage_bots()
 
-	# Classic redeploys the whole side at base each round, survivors included.
+	# Arena redeploys the whole side at base each round, survivors included.
 	for pid: int in participants:
 		var p: Participant = participants[pid]
 		if p.team != Protocol.TEAM_BLUE and p.team != Protocol.TEAM_RED:
@@ -980,7 +984,7 @@ func _on_kill(killer_id: int, _victim_id: int, head: bool, cause: int) -> void:
 		match_state.first_blood_done = true
 
 	var mp := false
-	if mode == "classic":
+	if mode == "arena":
 		var needed := match_state.win_rounds
 		if (match_state.score_blue == needed - 1 or match_state.score_red == needed - 1) and not match_state.match_point_announced:
 			mp = true
