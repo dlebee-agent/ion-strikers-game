@@ -416,6 +416,8 @@ func _physics_process(dt: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if not is_inside_tree():
+		return
 	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
 			or _hud.is_settings_open() or _match_over or GameConsole.is_open():
 		return
@@ -428,6 +430,11 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# change_scene from a leave/exit can leave this node receiving input while
+	# already out of the tree; get_viewport() is then null.
+	if not is_inside_tree():
+		return
+
 	if ConfirmPrompt.is_open():
 		return
 
@@ -439,30 +446,31 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _hud.is_settings_open():
 		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
 			_toggle_settings()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _hud.is_chat_open():
 		if event.is_action_pressed("ui_cancel"):
 			_hud.close_chat()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _team_panel.is_open():
 		# Keys (1/2/3, M, ESC) are owned by TeamPanel._input.
-		get_viewport().set_input_as_handled()
+		_mark_input_handled()
 		return
 
 	if _hud.is_controls_visible():
 		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
 			_close_controls_card()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _match_over:
 		if event.is_action_pressed("ui_cancel"):
+			# Mark handled before leaving — change_scene frees this node.
+			_mark_input_handled()
 			_exit_to_lobby()
-			get_viewport().set_input_as_handled()
 			return
 		if InputBinds.is_action_just_pressed("chat_all"):
 			_hud.open_chat(false)
@@ -1035,6 +1043,12 @@ func _request_leave() -> void:
 
 func _exit_to_lobby() -> void:
 	_on_leave()
+
+
+func _mark_input_handled() -> void:
+	var vp := get_viewport()
+	if vp:
+		vp.set_input_as_handled()
 
 
 func _enter_match_over(winner: int) -> void:
