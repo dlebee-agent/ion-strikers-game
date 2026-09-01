@@ -30,7 +30,20 @@ var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
-var _last_compiled: Dictionary = {}  # Map definition for bounds checks
+## Half extents of the map's floor, which is square on every map but grid
+## arena. Anything beyond it horizontally is off the map.
+var _bounds_half := Vector2(28.0, 28.0)
+
+## Below this a pawn has left the floor behind and is only going to keep
+## falling: the floor slab tops out at y=0 and its underside sits at y=-2,
+## so nothing that is still on the map is ever down here.
+const VOID_Y := -6.0
+## How far past the floor edge a pawn may be before it counts as off the
+## map. The perimeter walls stand on that edge, so the only way to be out
+## here is to have left over the top of one.
+const VOID_MARGIN := 1.5
+## Enough to kill through any amount of health.
+const VOID_DAMAGE := 1000
 
 var _tick: int = 0
 var _now: float = 0.0
@@ -109,10 +122,10 @@ func setup_map() -> void:
 func _setup_builtin_map() -> void:
 	var map_def: Dictionary = MapCatalog.builtin_definition(map_id)
 	var compiled := MapEngine.compile(map_def)
-	_last_compiled = compiled
 	world = MapBuilder.build_world(compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
 	arena_size = compiled.get("arena", 28.0)
+	_bounds_half = MapBuilder.floor_half(compiled)
 
 
 func _setup_community_map() -> void:
@@ -127,7 +140,7 @@ func _setup_community_map() -> void:
 	world = level.world
 	spawns = level.spawns
 	arena_size = level.arena
-	_last_compiled = {"arena": level.arena}  # Community maps are square only
+	_bounds_half = Vector2(level.arena, level.arena)
 	print("[server] %s: %d brushes, %d spawns" % [
 		map_id, world.brush_count(), level.spawn_count()])
 
@@ -496,30 +509,26 @@ func _tick_match(_dt: float) -> void:
 		_check_classic_round()
 
 
-# Kill pawns that fall outside the arena. The arena is defined by its size,
-# optionally with rectangular extent. A pawn outside those bounds takes the
-# void as damage equivalent and dies immediately.
+# Falling off the map kills rather than dropping forever. Grid arena's
+# catwalks run above the tops of its perimeter walls, so a player can step
+# over one into open space with nothing below to ever stop them.
+#
+# The height test is the one that catches everything: whatever route took
+# them off the map, they end up under it. The horizontal test is for a pawn
+# flung past the wall by a blast while still level with the floor.
 func _check_out_of_bounds() -> void:
 	for pid: int in pawns:
 		var pawn: ServerPawn = pawns[pid]
 		if not pawn.alive:
 			continue
-		var x := absf(pawn.position.x)
-		var z := absf(pawn.position.z)
-		# Check against the arena. For a square arena (no "floor" key), the
-		# bounds are ±arena. For rectangular, they're ±half_x and ±half_z.
-		var half_x := arena_size
-		var half_z := arena_size
-		var compiled := _last_compiled  # Built during setup_map()
-		if compiled.has("floor"):
-			var f: Array = compiled["floor"]
-			if f.size() >= 1:
-				half_x = float(f[0])
-			if f.size() >= 2:
-				half_z = float(f[1])
-		if x > half_x or z > half_z:
-			pawn.alive = false
-			_broadcast_hit(pid, Protocol.CAUSE_VOID, 0)
+		if pawn.position.y > VOID_Y \
+				and absf(pawn.position.x) <= _bounds_half.x + VOID_MARGIN \
+				and absf(pawn.position.z) <= _bounds_half.y + VOID_MARGIN:
+			continue
+		# Routed through the damage path so the death counts, the kill feed
+		# names the void, and a deathmatch respawn is scheduled, exactly as
+		# a lethal hit would. by_id 0 leaves it uncredited.
+		_apply_damage(pid, 0, VOID_DAMAGE, false, Protocol.CAUSE_VOID)
 
 
 func _check_classic_round() -> void:

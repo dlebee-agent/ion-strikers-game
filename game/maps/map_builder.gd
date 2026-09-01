@@ -13,7 +13,7 @@ const LAYER_PAWNS := 2
 
 static func build_colliders(compiled: Dictionary) -> Array[AABB]:
 	var out: Array[AABB] = []
-	var half := _floor_half(compiled)
+	var half := floor_half(compiled)
 	# Floor slab: top at y=0
 	out.append(AABB(Vector3(-half.x, -2.0, -half.y), Vector3(half.x * 2, 2.0, half.y * 2)))
 	for b: Dictionary in compiled["walls"]:
@@ -44,7 +44,7 @@ static func build_ambience(parent: Node3D, compiled: Dictionary) -> void:
 
 
 static func build_physics(parent: Node3D, compiled: Dictionary) -> void:
-	var half := _floor_half(compiled)
+	var half := floor_half(compiled)
 
 	_add_static_box(parent, Vector3(0.0, -1.0, 0.0), Vector3(half.x * 2, 2.0, half.y * 2))
 
@@ -70,7 +70,7 @@ static func _add_static_box(parent: Node3D, pos: Vector3, sz: Vector3) -> void:
 
 static func build_visual(parent: Node3D, compiled: Dictionary) -> Array[AABB]:
 	var arena: float = compiled["arena"]
-	var half := _floor_half(compiled)
+	var half := floor_half(compiled)
 	var colliders := build_colliders(compiled)
 
 	_build_floor(parent, half)
@@ -86,7 +86,7 @@ static func build_visual(parent: Node3D, compiled: Dictionary) -> Array[AABB]:
 
 # Half extents of the floor: square at the arena size unless the map gives
 # rectangular [half_x, half_z] extents.
-static func _floor_half(compiled: Dictionary) -> Vector2:
+static func floor_half(compiled: Dictionary) -> Vector2:
 	var arena: float = compiled["arena"]
 	var f: Array = compiled.get("floor", [])
 	if f.size() >= 2:
