@@ -434,7 +434,7 @@ func _physics_process(dt: float) -> void:
 		rp.tick_ragdoll(dt, _world)
 
 	if _local_ragdoll:
-		_local_ragdoll.update(dt, _world)
+		_local_ragdoll.update(dt, _world, _world.void_y() if _world != null else -INF)
 		if _local_ragdoll.dead:
 			if pawn:
 				pawn.set_mannequin_visible(false)

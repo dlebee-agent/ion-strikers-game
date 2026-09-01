@@ -30,9 +30,6 @@ var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
-## How far below the lowest brush a pawn has to get before it has left the
-## level. Far enough that standing in the basement of a tall map is not a death.
-const VOID_DROP := 8.0
 ## How far past the floor edge a pawn may be before it counts as off the
 ## map. The perimeter walls stand on that edge, so the only way to be out
 ## here is to have left over the top of one.
@@ -551,7 +548,7 @@ func _tick_match(_dt: float) -> void:
 func _check_out_of_bounds() -> void:
 	if world == null:
 		return
-	var floor_y := world.bounds.position.y - VOID_DROP
+	var floor_y := world.void_y()
 	var inside := world.bounds.grow(VOID_MARGIN)
 	for pid: int in pawns:
 		var pawn: ServerPawn = pawns[pid]

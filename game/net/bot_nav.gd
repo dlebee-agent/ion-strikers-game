@@ -16,8 +16,12 @@ const STEP_UP := 0.35
 const MAX_DROP := 2.6
 ## Mirrors Movement.MIN_WALK_NORMAL: shallower than this is a wall, not a floor.
 const MIN_WALK_NORMAL := 0.7
-## Levels to look through in one column before giving up on it.
-const MAX_LAYERS := 8
+## Probes to spend on one column before giving up on it. Most columns settle in
+## one or two; a sealed level costs a run of them to burrow through its shell.
+const MAX_LAYERS := 48
+## How far a probe that began inside solid drops before trying again. Shorter
+## than the body, so a gap the body fits in cannot be stepped over.
+const BURROW := 0.25
 ## Half-thickness of the pad surface_at drops, thin enough to read a surface
 ## height without catching on anything beside it.
 const PAD_HALF_HEIGHT := 0.02
@@ -186,7 +190,7 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 			return false
 		prev = h
 
-	return true
+	return _passage_clear(from, to)
 
 
 # ── build helpers ────────────────────────────────────────────────────────
@@ -228,7 +232,17 @@ func _standable(x: float, z: float) -> Array:
 		world.trace_box(Vector3(x, from_y, z), Vector3(x, basement, z), half, _probe)
 		if not _probe.hit():
 			break
+		if _probe.start_solid:
+			# Inside something. A sealed level (a BSP) is wrapped in a solid
+			# shell, and the only way to the rooms is through it.
+			from_y -= BURROW
+			continue
 		var feet := _probe.end_pos.y - half.y
+		if feet >= world.bounds.end.y - 0.01:
+			# The lid of the world: the top of a sealed level's shell, or the
+			# rim of an open one. Nothing is played up there.
+			from_y = _probe.end_pos.y - 0.05
+			continue
 		if _probe.normal.y >= MIN_WALK_NORMAL and _fits(x, z, feet):
 			return [feet, _probe.normal]
 		# Too steep, or no headroom. Drop under this surface and keep looking.
@@ -243,6 +257,22 @@ func _fits(x: float, z: float, feet: float) -> bool:
 		return false
 	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
 	return not world.box_overlaps(Vector3(x, feet + half.y, z), half)
+
+
+## The body can be swept between two standing spots without touching anything.
+## Cell heights alone cannot say this: two floor cells either side of a thin
+## wall are both fine to stand on, and a route through them walks into the wall.
+## The sweep runs level with the higher of the two floors, so a step or a ramp
+## between them is not what stops it.
+func _passage_clear(a: Vector3, b: Vector3) -> bool:
+	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
+	var cy := maxf(a.y, b.y) + half.y + 0.05
+	world.trace_box(Vector3(a.x, cy, a.z), Vector3(b.x, cy, b.z), half, _probe)
+	return not _probe.hit() and not _probe.start_solid
+
+
+func _cell_pos(idx: int) -> Vector3:
+	return Vector3(_axis_world(idx % _dim), _height[idx], _axis_world(idx / _dim))
 
 
 func _can_step(from_idx: int, to_idx: int) -> bool:
@@ -321,6 +351,8 @@ func _prune_to_reachable(seeds: Array[Vector3]) -> void:
 				continue
 			if not _diagonal_ok(ix, iz, d, idx):
 				continue
+			if not _passage_clear(_cell_pos(idx), _cell_pos(n_idx)):
+				continue
 			reached[n_idx] = 1
 			queue.append(n_idx)
 
@@ -357,6 +389,8 @@ func _build_graph() -> void:
 				if _open[n_idx] == 0 or not _can_step(idx, n_idx):
 					continue
 				if not _diagonal_ok(ix, iz, d, idx):
+					continue
+				if not _passage_clear(_cell_pos(idx), _cell_pos(n_idx)):
 					continue
 				_astar.connect_points(idx, n_idx, false)
 

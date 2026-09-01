@@ -223,20 +223,21 @@ func _push(bone_name: String, vx: float, vy: float, vz: float) -> void:
 
 # --- simulation ----------------------------------------------------------------
 
-func update(dt: float, world: CollisionWorld, has_floor: bool = true,
-		kill_y: float = -INF) -> void:
+## `kill_y` is where the world gives up on a body that fell out of it. A
+## world of null falls back to a flat floor at y=0, which is what the menu
+## mannequin and the tests stand on.
+func update(dt: float, world: CollisionWorld, kill_y: float = -INF) -> void:
 	if settled or dead:
 		return
 	var remain := minf(dt, 0.1)
 	while remain > 0.0001:
 		var step_dt := minf(remain, MAX_STEP)
-		_step(step_dt, world, has_floor, kill_y)
+		_step(step_dt, world, kill_y)
 		remain -= step_dt
 	_apply()
 
 
-func _step(dt: float, world: CollisionWorld, has_floor: bool,
-		kill_y: float) -> void:
+func _step(dt: float, world: CollisionWorld, kill_y: float) -> void:
 	var moved := 0.0
 	for bone_name: String in BONE_NAMES:
 		var p: Dictionary = parts[bone_name]
@@ -254,7 +255,7 @@ func _step(dt: float, world: CollisionWorld, has_floor: bool,
 
 	for _it in ITERATIONS:
 		_solve_constraints()
-		_collide(world, has_floor, kill_y)
+		_collide(world, kill_y)
 
 	calm = calm + dt if moved / (BONE_NAMES.size() * dt) < SETTLE_SPEED else 0.0
 	if calm > SETTLE_TIME:
@@ -286,18 +287,18 @@ func _solve_constraints() -> void:
 		pb["pos"] = b_pos - offset
 
 
-func _collide(world: CollisionWorld, has_floor: bool, kill_y: float) -> void:
+func _collide(world: CollisionWorld, kill_y: float) -> void:
 	for bone_name: String in BONE_NAMES:
 		var p: Dictionary = parts[bone_name]
 		var pos: Vector3 = p["pos"]
 		var r: float = p["r"]
 		p["grounded"] = false
 
-		if has_floor and pos.y - r < 0.0:
-			pos.y = r
-			p["grounded"] = true
-
-		if world != null:
+		if world == null:
+			if pos.y - r < 0.0:
+				pos.y = r
+				p["grounded"] = true
+		else:
 			# The bone is pushed out as a cube of its own radius rather than a
 			# sphere. A cube is what the brush world resolves exactly, and it is
 			# what lets a body settle on a ramp face instead of on the flat top

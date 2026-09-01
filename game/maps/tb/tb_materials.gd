@@ -36,6 +36,12 @@ static func is_skipped(texture: String) -> bool:
 	return SKIP_TEXTURES.has(texture.to_lower())
 
 
+# True when resolve() would hand back a real surface rather than the checker.
+func known(texture: String) -> bool:
+	var key := texture.to_lower()
+	return key.begins_with("ion/") or (_wad != null and _wad.has_texture(key))
+
+
 # Returns {"material": StandardMaterial3D, "size": Vector2}. The size is the
 # texture's pixel dimensions, which UV generation needs to normalise into 0..1.
 func resolve(texture: String) -> Dictionary:

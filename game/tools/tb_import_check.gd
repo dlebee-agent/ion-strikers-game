@@ -98,8 +98,11 @@ func _initialize() -> void:
 	var red: Array = level.spawns["red"]
 	_ok("one per team", [blue.size(), red.size()], [1, 1])
 	# Quake (0,-400,40) is Godot (0, 40u, 400u).
-	_ok("blue spawn converted", blue[0]["position"], Vector3(0, 40, 400) * u)
-	_ok("red spawn converted", red[0]["position"], Vector3(0, 40, -400) * u)
+	# The editor placed both 40 units up; the import drops them onto the slab,
+	# leaving only the sweep's surface offset between feet and floor.
+	var floor_y := CollisionWorld.SURFACE_OFFSET
+	_ok("blue spawn grounded", blue[0]["position"], Vector3(0, floor_y, 400 * u))
+	_ok("red spawn grounded", red[0]["position"], Vector3(0, floor_y, -400 * u))
 	# Quake's angle counts from +X, the game's yaw from -Z, a quarter turn apart.
 	_ok("blue faces down the map", blue[0]["yaw"], 0.0)
 	_ok("red faces back up it", red[0]["yaw"], 180.0)

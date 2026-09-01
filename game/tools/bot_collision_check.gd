@@ -97,12 +97,18 @@ func _audit(map_id: String) -> void:
 					deepest = maxf(deepest, depth)
 
 			var rise: float = p.position.y - prev.y
+			# A body that ran off the side of a ramp keeps the slope's upward
+			# velocity for a frame or two and coasts up a couple of centimetres.
+			# That is a hop, not a climb: a climb onto nothing arrives with no
+			# upward velocity to explain it.
+			var mover: Movement = inst.participants[pid].connection_session["ai"]["mover"]
+			var coasting := not p.grounded and mover.velocity.y > 0.0
 
 			# Climbing on nothing: the bot rose, and at the new spot its body
 			# rests on nothing walkable. Sweeping the BODY down asks the same
 			# question the bot's own support does, so a bot legitimately
 			# perched on a ledge edge is supported and not counted.
-			if rise > 0.02:
+			if rise > 0.02 and not coasting:
 				# Free the body first, exactly as Movement does before it moves.
 				# An axis-aligned box on a slope is always in epsilon contact,
 				# and a sweep that starts in contact reports nothing useful.

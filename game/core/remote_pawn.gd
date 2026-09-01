@@ -374,7 +374,7 @@ func end_ragdoll() -> void:
 
 func tick_ragdoll(dt: float, world: CollisionWorld) -> void:
 	if ragdoll:
-		ragdoll.update(dt, world)
+		ragdoll.update(dt, world, world.void_y() if world != null else -INF)
 		if ragdoll.dead:
 			set_body_visible(false)
 			end_ragdoll()

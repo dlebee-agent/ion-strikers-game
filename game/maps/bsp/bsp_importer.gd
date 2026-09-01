@@ -84,17 +84,21 @@ static func import_file(path: String) -> TbLevel:
 	level.bounds = level.world.bounds
 	level.arena = maxf(level.bounds.size.x, level.bounds.size.z) * 0.5
 
-	var materials := TbMaterials.new(bsp.textures)
-	level.mesh = _build_mesh(bsp, materials)
-	level.warnings.append_array(materials.warnings)
-
 	_read_spawns(ents, level)
+	level.ground_spawns()
+
+	var materials := TbMaterials.new(bsp.textures)
+	level.mesh = _build_mesh(bsp, materials, _team_homes(level))
+	level.warnings.append_array(materials.warnings)
 	return level
 
 
 # ── Drawing ──────────────────────────────────────────────────────────────
 
-static func _build_mesh(bsp: Bsp, materials: TbMaterials) -> ArrayMesh:
+## Prefix of the synthetic groups faces with no texture are painted into.
+const TEAM_PAINT := "__team/"
+
+static func _build_mesh(bsp: Bsp, materials: TbMaterials, homes: Dictionary) -> ArrayMesh:
 	# One SurfaceTool per texture, so a level of a thousand faces sharing nine
 	# textures costs nine draw calls.
 	var groups: Dictionary = {}
@@ -115,11 +119,17 @@ static func _build_mesh(bsp: Bsp, materials: TbMaterials) -> ArrayMesh:
 		if ring.size() < 3:
 			continue
 
+		# A texture the archive did not ship is painted in the colour of the
+		# side whose spawns it is nearest, which reads as intent rather than
+		# as a mistake. The name is still reported so a mapper can fix it.
+		var size: Vector2 = materials.resolve(tex)["size"]
+		if not materials.known(tex) and not homes.is_empty():
+			tex = TEAM_PAINT + _nearest_team(_ring_centre(ring), homes)
+
 		if not groups.has(tex):
 			var st := SurfaceTool.new()
 			st.begin(Mesh.PRIMITIVE_TRIANGLES)
 			groups[tex] = st
-		var size: Vector2 = materials.resolve(tex)["size"]
 		_add_face(groups[tex], bsp, ti, ring, size)
 
 	var mesh := ArrayMesh.new()
@@ -132,8 +142,61 @@ static func _build_mesh(bsp: Bsp, materials: TbMaterials) -> ArrayMesh:
 		var surface := st.commit_to_arrays()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, surface)
 		mesh.surface_set_material(mesh.get_surface_count() - 1,
-			materials.resolve(tex)["material"])
+			_team_paint(tex.trim_prefix(TEAM_PAINT)) if tex.begins_with(TEAM_PAINT)
+			else materials.resolve(tex)["material"])
 	return mesh
+
+
+static func _team_paint(team: String) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	match team:
+		"blue":
+			mat.albedo_color = TeamTint.BODY_BLUE
+		"red":
+			mat.albedo_color = TeamTint.BODY_RED
+		_:
+			mat.albedo_color = Color(0.55, 0.56, 0.6)
+	mat.roughness = 0.8
+	return mat
+
+
+# Where each side spawns, on average, in Godot space.
+static func _team_homes(level: TbLevel) -> Dictionary:
+	var homes: Dictionary = {}
+	for team: String in TEAMS:
+		var points: Array = level.spawns.get(team, [])
+		if points.is_empty():
+			continue
+		var sum := Vector3.ZERO
+		for entry: Dictionary in points:
+			sum += entry["position"] as Vector3
+		homes[team] = sum / float(points.size())
+	return homes
+
+
+# The side a point clearly belongs to, or "" for one sitting between them.
+# Clearly means well under three quarters of the way to the other side's home,
+# so the middle of a symmetric map stays neutral.
+static func _nearest_team(at: Vector3, homes: Dictionary) -> String:
+	var best := ""
+	var best_d := INF
+	var other_d := INF
+	for team: String in homes:
+		var d: float = at.distance_squared_to(homes[team])
+		if d < best_d:
+			other_d = best_d
+			best_d = d
+			best = team
+		elif d < other_d:
+			other_d = d
+	return best if best_d < other_d * 0.5 else ""
+
+
+static func _ring_centre(ring: PackedVector3Array) -> Vector3:
+	var sum := Vector3.ZERO
+	for q in ring:
+		sum += TbMap.to_godot(q)
+	return sum / float(ring.size())
 
 
 # The vertex ring of a face, still in Quake units because the texture solve is
