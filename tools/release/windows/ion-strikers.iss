@@ -53,7 +53,7 @@ VersionInfoVersion={#MyAppVersionCore}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppVersionCore}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
