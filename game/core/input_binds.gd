@@ -16,7 +16,7 @@ const BIND_DEFAULTS: Dictionary = {
 	"scoreboard": ["Tab", "L"],
 	"controls": ["H", ""],
 	"team_menu": ["M", ""],
-	"chat_all": ["Y", "Enter"],
+	"chat_all": ["Y", ""],
 	"chat_team": ["U", ""],
 	"spec_swap": ["V", ""],
 	"console": ["`", ""],
@@ -85,6 +85,19 @@ func _load_saved() -> void:
 	var ctrl: Array = bindings["controls"]
 	if (ctrl[0] == "F1" and (ctrl[1] as String).is_empty()) or (ctrl[0] == "H" and ctrl[1] == "F1"):
 		bindings["controls"] = BIND_DEFAULTS["controls"].duplicate()
+		save_bindings()
+	# Enter was also chat_all, so submitting a message immediately re-opened chat.
+	# Migrate the old Y+Enter default; leave other custom chat binds alone.
+	var chat: Array = bindings["chat_all"]
+	if chat[0] == "Y" and chat[1] == "Enter":
+		bindings["chat_all"] = BIND_DEFAULTS["chat_all"].duplicate()
+		save_bindings()
+	elif chat[0] == "Enter" or chat[1] == "Enter":
+		if chat[1] == "Enter":
+			chat[1] = ""
+		if chat[0] == "Enter":
+			chat[0] = "Y"
+		bindings["chat_all"] = chat
 		save_bindings()
 
 func save_bindings() -> void:
