@@ -30,6 +30,7 @@ var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
+var _last_compiled: Dictionary = {}  # Map definition for bounds checks
 
 var _tick: int = 0
 var _now: float = 0.0
@@ -108,6 +109,7 @@ func setup_map() -> void:
 func _setup_builtin_map() -> void:
 	var map_def: Dictionary = MapCatalog.builtin_definition(map_id)
 	var compiled := MapEngine.compile(map_def)
+	_last_compiled = compiled
 	world = MapBuilder.build_world(compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
 	arena_size = compiled.get("arena", 28.0)
@@ -125,6 +127,7 @@ func _setup_community_map() -> void:
 	world = level.world
 	spawns = level.spawns
 	arena_size = level.arena
+	_last_compiled = {"arena": level.arena}  # Community maps are square only
 	print("[server] %s: %d brushes, %d spawns" % [
 		map_id, world.brush_count(), level.spawn_count()])
 
@@ -487,8 +490,36 @@ func _tick_match(_dt: float) -> void:
 			_start_round()
 		return
 
+	_check_out_of_bounds()
+
 	if mode == "classic":
 		_check_classic_round()
+
+
+# Kill pawns that fall outside the arena. The arena is defined by its size,
+# optionally with rectangular extent. A pawn outside those bounds takes the
+# void as damage equivalent and dies immediately.
+func _check_out_of_bounds() -> void:
+	for pid: int in pawns:
+		var pawn: ServerPawn = pawns[pid]
+		if not pawn.alive:
+			continue
+		var x := absf(pawn.position.x)
+		var z := absf(pawn.position.z)
+		# Check against the arena. For a square arena (no "floor" key), the
+		# bounds are ±arena. For rectangular, they're ±half_x and ±half_z.
+		var half_x := arena_size
+		var half_z := arena_size
+		var compiled := _last_compiled  # Built during setup_map()
+		if compiled.has("floor"):
+			var f: Array = compiled["floor"]
+			if f.size() >= 1:
+				half_x = float(f[0])
+			if f.size() >= 2:
+				half_z = float(f[1])
+		if x > half_x or z > half_z:
+			pawn.alive = false
+			_broadcast_hit(pid, Protocol.CAUSE_VOID, 0)
 
 
 func _check_classic_round() -> void:
