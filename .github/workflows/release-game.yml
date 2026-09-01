@@ -65,7 +65,8 @@ jobs:
 
   # -------------------------------------------------------------------------
   # Linux + Windows. Godot exports both from the same Linux runner, so one
-  # engine + template download covers four artifacts.
+  # engine + template download covers four artifacts. The Windows client is
+  # handed to package-windows as a folder; only the Windows server stays a zip.
   # -------------------------------------------------------------------------
   build-desktop:
     name: Export Linux + Windows
@@ -164,18 +165,89 @@ jobs:
             tar -czf "$GITHUB_WORKSPACE/dist/${name}.tar.gz" -C "$STAGE" "$name"
           done
 
-          for name in "${{ steps.export.outputs.win_client }}" \
-                      "${{ steps.export.outputs.win_server }}"; do
-            ( cd "$STAGE" && zip -qr "$GITHUB_WORKSPACE/dist/${name}.zip" "$name" )
-          done
+          # Windows client becomes an Inno Setup installer in package-windows;
+          # only the portable server zip is published from this job.
+          name="${{ steps.export.outputs.win_server }}"
+          ( cd "$STAGE" && zip -qr "$GITHUB_WORKSPACE/dist/${name}.zip" "$name" )
 
           ls -la "$GITHUB_WORKSPACE/dist"
+
+      - name: Upload Windows client stage
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-client
+          path: ${{ steps.export.outputs.stage }}/${{ steps.export.outputs.win_client }}/
+          if-no-files-found: error
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: desktop
           path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Windows client installer. Godot exports an .exe + .pck; Inno Setup wraps
+  # that into a normal setup wizard (Start Menu, uninstall entry, optional
+  # desktop shortcut). NSIS is the other tool Godot mentions — we deliberately
+  # keep only Inno Setup.
+  # -------------------------------------------------------------------------
+  package-windows:
+    name: Windows Inno Setup
+    runs-on: windows-latest
+    needs: [validate, build-desktop]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows client stage
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-client
+          path: stage
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build setup.exe
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CORE: ${{ needs.validate.outputs.core }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            throw "ISCC.exe not found at $iscc"
+          }
+
+          # VersionInfoVersion must be four numeric components.
+          $core = $env:CORE
+          if (($core -split '\.').Count -eq 3) { $core = "$core.0" }
+
+          $source = (Resolve-Path 'stage').Path
+          $outDir = (Resolve-Path 'dist').Path
+          $outName = "ion-strikers-$env:VERSION-windows-x86_64-setup"
+
+          & $iscc `
+            "/DMyAppVersion=$env:VERSION" `
+            "/DMyAppVersionCore=$core" `
+            "/DSourceDir=$source" `
+            "/DOutputDir=$outDir" `
+            "/DOutputName=$outName" `
+            'tools\release\windows\ion-strikers.iss'
+
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
@@ -455,7 +527,7 @@ jobs:
   # -------------------------------------------------------------------------
   release:
     name: Publish GitHub Release
-    needs: [validate, build-desktop, build-macos]
+    needs: [validate, build-desktop, package-windows, build-macos]
     runs-on: ubuntu-latest
 
     steps:
@@ -464,6 +536,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          # Omit windows-client: that is the raw Godot export used only to
+          # feed Inno Setup, not a release attachment.
+          pattern: '{desktop,macos,windows-installer}'
 
       - name: Generate checksums
         run: |
@@ -486,4 +561,5 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.dmg
+            dist/*-setup.exe
             dist/checksums.txt
