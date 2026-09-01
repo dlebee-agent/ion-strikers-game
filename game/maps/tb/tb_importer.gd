@@ -70,6 +70,7 @@ static func import_file(map_path: String, wad_path := "") -> TbLevel:
 
 	_read_spawns(parsed, level)
 	_read_pads(parsed, level)
+	level.ground_spawns()
 	return level
 
 

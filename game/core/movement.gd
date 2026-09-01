@@ -45,6 +45,9 @@ var position := Vector3.ZERO
 var velocity := Vector3.ZERO
 var yaw := 0.0
 var pitch := 0.0
+# Multiplies the wish speed. Players run at 1.0; a bot's skill preset sets it
+# lower, and that is the only difference between how the two are moved.
+var speed_scale := 1.0
 var on_ground := true
 var is_crouching := false
 var jump_latch := false
@@ -84,7 +87,7 @@ func update(dt: float, wish_forward: float, wish_side: float, want_jump: bool,
 	elif want_walk:
 		speed_mod = WALK_MOD
 
-	var wish_speed := RUN_SPEED * speed_mod
+	var wish_speed := RUN_SPEED * speed_mod * speed_scale
 	var fwd := get_forward()
 	var right := get_right()
 
@@ -284,6 +287,16 @@ func _settle_ground(world: CollisionWorld, half: Vector3, was_on_ground: bool) -
 	# ledge would snap them straight back to it.
 	var reach := STEP_HEIGHT if was_on_ground else GROUND_SKIN * 4.0
 	var landed := _sweep(world, half, position, position - Vector3(0.0, reach, 0.0))
+	if _trace.start_solid:
+		# In contact with whatever is underfoot — which on a slope is every
+		# frame, since an axis-aligned box cannot lie flat on a tilted plane.
+		# Calling that airborne dropped the body to air control for a frame
+		# (AIR_SPEED_CAP is a crawl) before it re-grounded on the next, which
+		# is the "slipping up the ramp" feel. Free the body and ask again, the
+		# way the move itself does before it sweeps.
+		var lift := Vector3(0.0, half.y, 0.0)
+		var freed := position + world.depenetrate(position + lift, half)
+		landed = _sweep(world, half, freed, freed - Vector3(0.0, reach, 0.0))
 	if not _trace.hit() or _trace.start_solid:
 		return
 	if _trace.normal.y < MIN_WALK_NORMAL:

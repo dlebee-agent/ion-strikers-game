@@ -16,8 +16,12 @@ const STEP_UP := 0.35
 const MAX_DROP := 2.6
 ## Mirrors Movement.MIN_WALK_NORMAL: shallower than this is a wall, not a floor.
 const MIN_WALK_NORMAL := 0.7
-## Levels to look through in one column before giving up on it.
-const MAX_LAYERS := 8
+## Probes to spend on one column before giving up on it. Most columns settle in
+## one or two; a sealed level costs a run of them to burrow through its shell.
+const MAX_LAYERS := 48
+## How far a probe that began inside solid drops before trying again. Shorter
+## than the body, so a gap the body fits in cannot be stepped over.
+const BURROW := 0.25
 ## Half-thickness of the pad surface_at drops, thin enough to read a surface
 ## height without catching on anything beside it.
 const PAD_HALF_HEIGHT := 0.02
@@ -90,13 +94,19 @@ func blocked(from: Vector3, to: Vector3) -> bool:
 ## Highest surface under the footprint that is no higher than `ceiling`.
 ## Doubles as the step-up target and the landing height, since both ask the same
 ## question: what is the highest thing within reach of these feet?
-func surface_at(x: float, z: float, ceiling: float) -> float:
+func surface_at(x: float, z: float, ceiling: float, radius := BODY_RADIUS) -> float:
 	if world == null:
 		return -INF
-	# A thin pad the width of the body, dropped from the ceiling. Sweeping the
-	# footprint rather than reading bounding box tops is what lets this land
-	# partway up a ramp instead of at its peak.
-	var half := Vector3(BODY_RADIUS, PAD_HALF_HEIGHT, BODY_RADIUS)
+	# A thin pad, dropped from the ceiling. Sweeping the footprint rather than
+	# reading bounding box tops is what lets this land partway up a ramp instead
+	# of at its peak.
+	#
+	# The radius is a parameter because two different questions get asked of it.
+	# The body-width pad answers "is anything holding me up", which is what keeps
+	# a bot on a ledge it is only half standing on. A narrow pad answers "is the
+	# surface under me", which is what climbing has to be judged against — see
+	# BotDirector._apply_motion.
+	var half := Vector3(radius, PAD_HALF_HEIGHT, radius)
 	var basement := world.bounds.position.y - 1.0
 	world.trace_box(Vector3(x, ceiling + half.y, z), Vector3(x, basement, z), half, _probe)
 	if not _probe.hit() or _probe.start_solid:
@@ -180,7 +190,7 @@ func walk_clear(from: Vector3, to: Vector3) -> bool:
 			return false
 		prev = h
 
-	return true
+	return _passage_clear(from, to)
 
 
 # ── build helpers ────────────────────────────────────────────────────────
@@ -222,7 +232,17 @@ func _standable(x: float, z: float) -> Array:
 		world.trace_box(Vector3(x, from_y, z), Vector3(x, basement, z), half, _probe)
 		if not _probe.hit():
 			break
+		if _probe.start_solid:
+			# Inside something. A sealed level (a BSP) is wrapped in a solid
+			# shell, and the only way to the rooms is through it.
+			from_y -= BURROW
+			continue
 		var feet := _probe.end_pos.y - half.y
+		if feet >= world.bounds.end.y - 0.01:
+			# The lid of the world: the top of a sealed level's shell, or the
+			# rim of an open one. Nothing is played up there.
+			from_y = _probe.end_pos.y - 0.05
+			continue
 		if _probe.normal.y >= MIN_WALK_NORMAL and _fits(x, z, feet):
 			return [feet, _probe.normal]
 		# Too steep, or no headroom. Drop under this surface and keep looking.
@@ -237,6 +257,22 @@ func _fits(x: float, z: float, feet: float) -> bool:
 		return false
 	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
 	return not world.box_overlaps(Vector3(x, feet + half.y, z), half)
+
+
+## The body can be swept between two standing spots without touching anything.
+## Cell heights alone cannot say this: two floor cells either side of a thin
+## wall are both fine to stand on, and a route through them walks into the wall.
+## The sweep runs level with the higher of the two floors, so a step or a ramp
+## between them is not what stops it.
+func _passage_clear(a: Vector3, b: Vector3) -> bool:
+	var half := Vector3(BODY_RADIUS, BODY_HEIGHT * 0.5, BODY_RADIUS)
+	var cy := maxf(a.y, b.y) + half.y + 0.05
+	world.trace_box(Vector3(a.x, cy, a.z), Vector3(b.x, cy, b.z), half, _probe)
+	return not _probe.hit() and not _probe.start_solid
+
+
+func _cell_pos(idx: int) -> Vector3:
+	return Vector3(_axis_world(idx % _dim), _height[idx], _axis_world(idx / _dim))
 
 
 func _can_step(from_idx: int, to_idx: int) -> bool:
@@ -315,6 +351,8 @@ func _prune_to_reachable(seeds: Array[Vector3]) -> void:
 				continue
 			if not _diagonal_ok(ix, iz, d, idx):
 				continue
+			if not _passage_clear(_cell_pos(idx), _cell_pos(n_idx)):
+				continue
 			reached[n_idx] = 1
 			queue.append(n_idx)
 
@@ -351,6 +389,8 @@ func _build_graph() -> void:
 				if _open[n_idx] == 0 or not _can_step(idx, n_idx):
 					continue
 				if not _diagonal_ok(ix, iz, d, idx):
+					continue
+				if not _passage_clear(_cell_pos(idx), _cell_pos(n_idx)):
 					continue
 				_astar.connect_points(idx, n_idx, false)
 

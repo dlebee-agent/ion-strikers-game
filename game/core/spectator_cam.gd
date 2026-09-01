@@ -12,16 +12,28 @@ const FLY_BOOST := 2.2
 const PITCH_LIMIT := 89.0
 
 const SPEC_FLY_SPEED := 26.0
-const SPEC_FLY_MIN := 0.35
+# The floor matters more than the speed: two teammates standing together are a
+# metre apart, and without a minimum travel time the switch reads as a hard cut
+# rather than a move. 0.6s is long enough to see that the camera went somewhere.
+const SPEC_FLY_MIN := 0.6
 const SPEC_FLY_MAX := 1.2
 
 const DEATH_PULLBACK := 2.6
 const DEATH_SETTLE_SPEED := 0.7
-const DEATH_RIGIDITY := 0.4
 const DEATH_REVEAL := 0.8
 const DEATH_KILLER_BIAS := 0.55
 const DEATH_SKIM := 0.3
 const DEATH_LOOK_INTERVAL := 0.25
+## How much better a new look direction has to score before the camera leaves
+## the one it has. Without this it flips between two near-equal directions
+## every pick, and each flip is a 30-degree jerk.
+const DEATH_LOOK_MARGIN := 0.6
+## Seconds for the camera to take most of a change of look direction, and for
+## the pull-back position to follow. A pick is a discrete choice; the camera
+## must never move like one.
+const DEATH_LOOK_EASE := 0.35
+const DEATH_POS_EASE := 0.12
+const DEATH_AIM_EASE := 0.18
 
 const ORBIT_RADIUS := 26.0
 const ORBIT_HEIGHT := 22.0
@@ -57,6 +69,8 @@ var _death_world: CollisionWorld = null
 var _death_probe := TraceResult.new()
 var _death_killer_pos: Variant = null  # Vector3 or null
 var _death_look := Vector3.ZERO
+# The direction the picker last chose; _death_look eases toward it.
+var _death_look_goal := Vector3.ZERO
 var _death_look_t := 0.0
 var _death_shown := false
 var _death_mannequin: Node3D  # set externally when ragdoll hides body
@@ -125,6 +139,7 @@ func start_death_ragdoll(body_pos: Vector3, eye_pos: Vector3,
 	_death_world = world
 	_death_killer_pos = killer_pos
 	_death_look = Vector3.ZERO
+	_death_look_goal = Vector3.ZERO
 	_death_look_t = 0.0
 	_death_shown = false
 	_pos = eye_pos
@@ -140,6 +155,13 @@ func start_death_ragdoll(body_pos: Vector3, eye_pos: Vector3,
 
 
 func start_teammate_follow() -> void:
+	# Leaving a death follow has to give the corpse back: the death camera hides
+	# the local mannequin until it has pulled far enough away, and nothing else
+	# turns it on again.
+	if _death_mannequin and is_instance_valid(_death_mannequin):
+		_death_mannequin.visible = true
+	_death_ragdoll = null
+	_death_mannequin = null
 	follow_state = FollowState.TEAMMATE
 	_fly_active = false
 	_target_id = 0
@@ -182,7 +204,14 @@ func toggle_view_mode() -> void:
 	else:
 		view_mode = ViewMode.FREE_FLY
 		_clear_hidden()
+		_fly_active = false
+		# Free-fly reads _pos and the euler pair, so hand it back the transform
+		# the FPV view ended on instead of a stale one from before the switch.
+		_pos = _camera.global_position
+		_yaw = rad_to_deg(_camera.rotation.y)
+		_pitch = clampf(rad_to_deg(_camera.rotation.x), -PITCH_LIMIT, PITCH_LIMIT)
 	_fpv_inited = false
+	_last_target_id = 0
 
 
 func cycle_target(dir: int, remotes: Dictionary, team_filter: int) -> void:
@@ -360,15 +389,40 @@ func _update_watch_fpv(dt: float, remotes: Dictionary) -> void:
 	if _target_id == 0 or not all.has(_target_id):
 		_target_id = all[0] if not all.is_empty() else 0
 
+	# Same arc the teammate follow uses. Cutting straight into the next player's
+	# eyes gives no sense of where they are relative to the last one, and coming
+	# out of free-fly it is not even clear the view changed at all.
+	if _target_id != _last_target_id or not _fpv_inited:
+		_last_target_id = _target_id
+		_fpv_inited = true
+		if _target_id != 0:
+			_fly_active = true
+			_fly_from = _camera.global_position
+			_fly_from_rot = _camera.quaternion
+			_fly_t = 0.0
+			_fly_dur = 0.0
+			_fly_arc = 0.0
+		else:
+			_fly_active = false
+
 	if _target_id != 0 and remotes.has(_target_id):
 		var rp: RemotePawn = remotes[_target_id]
 		var eye := rp.sample_eye()
-		_camera.global_position = Vector3(eye["x"], eye["y"] + eye["eye_h"], eye["z"])
-		_camera.rotation_degrees = Vector3(eye["pitch"], eye["yaw"], 0.0)
-		_set_hidden(_target_id, remotes)
+		var dest := Vector3(eye["x"], eye["y"] + eye["eye_h"], eye["z"])
+		if _fly_active:
+			_do_fly_between(dt, dest, eye["pitch"], eye["yaw"], remotes)
+		else:
+			_camera.global_position = dest
+			_camera.rotation_degrees = Vector3(eye["pitch"], eye["yaw"], 0.0)
+			_set_hidden(_target_id, remotes)
 	else:
+		_fly_active = false
 		_clear_hidden()
-		_camera.global_position = Vector3(0.0, _arena_size * 1.15, 0.01)
+		# Held off the vertical: looking straight down with UP as the up vector
+		# leaves look_at one cross product away from collapsing, and Godot hands
+		# back an identity basis when it does.
+		_camera.global_position = Vector3(
+			0.0, _arena_size * 1.15, _arena_size * 0.45)
 		_camera.look_at(Vector3.ZERO, Vector3.UP)
 
 
@@ -417,11 +471,20 @@ func _update_death_ragdoll_cam(dt: float, remotes: Dictionary, my_team: int) -> 
 				if rp_pos.distance_squared_to(_death_killer_pos as Vector3) < 1.0:
 					_death_killer_pos = rp_pos
 
-	# Pick the look direction a few times a second — every frame twitches.
+	# Pick the look direction a few times a second — every frame twitches —
+	# and ease toward the pick, so a change of mind is a turn, not a cut.
 	_death_look_t += dt
-	if _death_look == Vector3.ZERO or _death_look_t > DEATH_LOOK_INTERVAL:
-		_death_look = _pick_death_look(hp, _death_killer_pos)
+	if _death_look_goal == Vector3.ZERO or _death_look_t > DEATH_LOOK_INTERVAL:
+		_death_look_goal = _pick_death_look(hp, _death_killer_pos, _death_look_goal)
 		_death_look_t = 0.0
+	if _death_look == Vector3.ZERO:
+		_death_look = _death_look_goal
+	else:
+		_death_look = _death_look.lerp(_death_look_goal, _ease(dt, DEATH_LOOK_EASE))
+		if _death_look.length_squared() > 0.0001:
+			_death_look = _death_look.normalized()
+		else:
+			_death_look = _death_look_goal
 
 	# Position: ride the Head while it tumbles; after settle, pull back along
 	# the opposite of the look direction, skimmed off geometry.
@@ -438,8 +501,7 @@ func _update_death_ragdoll_cam(dt: float, remotes: Dictionary, my_team: int) -> 
 			target_pos = hp + nb * clearance
 
 	var cur := _camera.global_position
-	var k := minf(1.0, dt * 26.0)
-	_pos = cur.lerp(target_pos, k)
+	_pos = cur.lerp(target_pos, _ease(dt, DEATH_POS_EASE))
 	_camera.global_position = _pos
 
 	# Orientation: chase the head with killer bias, lean toward the body once settled.
@@ -457,8 +519,7 @@ func _update_death_ragdoll_cam(dt: float, remotes: Dictionary, my_team: int) -> 
 			var corpse_quat := _camera.quaternion
 			aim_quat = aim_quat.slerp(corpse_quat, _death_settle_t)
 
-	var rk := minf(1.0, dt * (4.0 + 26.0 * DEATH_RIGIDITY))
-	_camera.quaternion = _camera.quaternion.slerp(aim_quat, rk)
+	_camera.quaternion = _camera.quaternion.slerp(aim_quat, _ease(dt, DEATH_AIM_EASE))
 
 	# Reveal the body once the camera has pulled away far enough.
 	var cam_dist := _camera.global_position.distance_to(hp)
@@ -473,7 +534,10 @@ func _update_death_ragdoll_cam(dt: float, remotes: Dictionary, my_team: int) -> 
 	_death_can_leave = can_leave
 
 
-func _pick_death_look(hp: Vector3, killer_pos: Variant) -> Vector3:
+## The direction to look from a dead head: toward the killer where the view is
+## open, otherwise wherever it is. `current` is the direction already chosen,
+## kept unless something clearly better turns up.
+func _pick_death_look(hp: Vector3, killer_pos: Variant, current: Vector3) -> Vector3:
 	var base_yaw: float = 0.0
 	var has_killer := killer_pos != null
 	if has_killer:
@@ -484,16 +548,23 @@ func _pick_death_look(hp: Vector3, killer_pos: Variant) -> Vector3:
 	var best_score := -INF
 	for i in 12:
 		var yaw := base_yaw + float(i) / 12.0 * TAU
-		var dx := sin(yaw)
-		var dz := cos(yaw)
-		var d := _ray_clearance(hp, Vector3(dx, 0.0, dz), 8.0)
-		var clear := minf(d, 4.0)
-		var toward := cos(yaw - base_yaw) if has_killer else 0.0
-		var score := clear * 0.7 + toward * 3.2
+		var dir := Vector3(sin(yaw), 0.0, cos(yaw))
+		var score := _death_look_score(hp, dir, base_yaw, has_killer)
 		if score > best_score:
 			best_score = score
-			best = Vector3(dx, 0.0, dz)
+			best = dir
+	if current != Vector3.ZERO:
+		var cur_yaw := atan2(current.x, current.z)
+		if _death_look_score(hp, current, base_yaw, has_killer) + DEATH_LOOK_MARGIN >= best_score \
+				or absf(angle_difference(cur_yaw, atan2(best.x, best.z))) < 0.01:
+			return current
 	return best
+
+
+func _death_look_score(hp: Vector3, dir: Vector3, base_yaw: float, has_killer: bool) -> float:
+	var clear := minf(_ray_clearance(hp, dir, 8.0), 4.0)
+	var toward := cos(atan2(dir.x, dir.z) - base_yaw) if has_killer else 0.0
+	return clear * 0.7 + toward * 3.2
 
 
 func _ray_clearance(origin: Vector3, dir: Vector3, want: float) -> float:
@@ -635,6 +706,12 @@ func _clear_hidden() -> void:
 		if is_instance_valid(prev):
 			prev.set_body_visible(true)
 	_hidden_id = 0
+
+
+## Frame-rate independent blend weight that closes most of the gap to a target
+## in `seconds`, whatever the frame time.
+static func _ease(dt: float, seconds: float) -> float:
+	return 1.0 - exp(-dt / maxf(seconds, 0.001))
 
 
 func _smoothstep(t: float) -> float:

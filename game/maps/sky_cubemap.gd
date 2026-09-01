@@ -26,6 +26,13 @@ static func make_sky(compiled: Dictionary) -> Sky:
 	return sky
 
 
+## The set to borrow when a level names a sky nobody has baked. Generating one
+## instead takes the better part of a minute, and a level asks for its sky in
+## the middle of a connect, so the handshake would time out long before the
+## first star was drawn. A borrowed sky is wrong; a stalled join is broken.
+const FALLBACK_BAKED := "parkour"
+
+
 static func cubemap_for(compiled: Dictionary) -> Cubemap:
 	var key := str(compiled.get("id", "default"))
 	if _cache.has(key):
@@ -34,6 +41,14 @@ static func cubemap_for(compiled: Dictionary) -> Cubemap:
 	if baked:
 		_cache[key] = baked
 		return baked
+
+	if key != FALLBACK_BAKED:
+		var borrowed := _load_baked(FALLBACK_BAKED)
+		if borrowed:
+			push_warning("SkyCubemap: no baked sky '%s', using '%s'"
+				% [key, FALLBACK_BAKED])
+			_cache[key] = borrowed
+			return borrowed
 	var sky: Dictionary = compiled.get("sky", {})
 	var raw: Dictionary = sky.get("cubemap", {})
 	if not raw.has("seed"):

@@ -58,12 +58,23 @@ var _built := false
 var bounds := AABB()
 var _has_bounds := false
 
+## How far below the lowest brush a body has to get before it has left the
+## level. Far enough that the basement of a tall map is not a death.
+const VOID_DROP := 8.0
+
 # Scratch reused by the broadphase so a query allocates nothing.
 var _visited: Dictionary = {}
 
 
 func brush_count() -> int:
 	return _brush_first.size()
+
+
+## The height below which the world kills whatever is still falling. One
+## number for the server's pawns and the client's ragdolls, so a corpse and a
+## body leave the level at the same place.
+func void_y() -> float:
+	return bounds.position.y - VOID_DROP
 
 
 func bounds_of(index: int) -> AABB:

@@ -19,6 +19,10 @@ const END_FORFEIT := 2
 const CLOCK_UP := 0
 const CLOCK_DOWN := 1
 
+## Bytes per player in a SNAP entry: id(4) flags(1) x/y/z/yaw/pitch(20) hp(1)
+## kills(2) deaths(2) team(1) ping(2) special_progress(1).
+const SNAP_PLAYER_BYTES := 34
+
 const MODE_ARENA := 0
 const MODE_DM := 1
 
@@ -254,6 +258,12 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["clock_mode"] = b.get_u8()
 			var count := b.get_u8()
 			var players: Array[Dictionary] = []
+			# A short packet used to be read anyway: StreamPeerBuffer hands back
+			# zeros past the end, so a truncated snapshot silently invented
+			# players standing at the world origin.
+			if b.get_available_bytes() < count * SNAP_PLAYER_BYTES:
+				d["players"] = players
+				return d
 			for _i in count:
 				var p := {}
 				p["id"] = b.get_32()

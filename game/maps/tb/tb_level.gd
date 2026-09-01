@@ -30,6 +30,33 @@ var bounds := AABB()
 var warnings: Array[String] = []
 
 
+## How far below a spawn point the floor is allowed to be before the point is
+## left where the mapper put it. Quake-family editors place a spawn at the
+## player's centre, a good metre and a half up; anything much further is a
+## point over a pit, which snapping would hide.
+const SPAWN_REACH := 4.0
+
+
+## Drops every spawn point onto the floor under it, so a body arrives standing
+## rather than falling in from wherever the editor's origin sat.
+func ground_spawns() -> void:
+	if world == null:
+		return
+	var half := Vector3(Movement.PLAYER_RADIUS, Movement.STAND_HEIGHT * 0.5, Movement.PLAYER_RADIUS)
+	var lift := Vector3(0.0, half.y, 0.0)
+	var probe := TraceResult.new()
+	for team: String in spawns:
+		for entry: Dictionary in spawns[team]:
+			var at: Vector3 = entry["position"]
+			world.trace_box(at + lift, at + lift - Vector3(0.0, SPAWN_REACH, 0.0), half, probe)
+			if probe.start_solid:
+				warnings.append("%s spawn at %s is inside the walls" % [team, at])
+			elif not probe.hit():
+				warnings.append("%s spawn at %s has no floor within %.0fm" % [team, at, SPAWN_REACH])
+			else:
+				entry["position"] = Vector3(at.x, probe.end_pos.y - half.y, at.z)
+
+
 func spawn_count() -> int:
 	var n := 0
 	for team: String in spawns:

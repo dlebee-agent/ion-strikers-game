@@ -1,7 +1,13 @@
 class_name MatchState
 extends RefCounted
 
-const ROUND_END_DELAY := 3.5
+# The round card fades in, holds, and fades out inside this window, and the
+# client reads the same constant to size its hold. Below ~5s the result flashes
+# past before anyone has read the score.
+const ROUND_END_DELAY := 5.0
+## Held breath at the top of a round. Nobody moves or fires until it lapses,
+## bots included — the server enforces it, and the client's freeze mirrors it.
+const ROUND_FREEZE := 1.0
 const DM_RESPAWN_MS := 5000.0
 
 ## How long an arena round runs before it is decided on who is left
@@ -36,6 +42,7 @@ var first_blood_done: bool = false
 var match_point_announced: bool = false
 
 var round_end_at: float = 0.0
+var freeze_until: float = 0.0
 
 ## Instance clock the running round expires on, and the same for a whole
 ## deathmatch. Zero arms on the next tick.

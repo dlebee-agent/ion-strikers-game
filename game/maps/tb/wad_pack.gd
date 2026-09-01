@@ -109,6 +109,19 @@ static func load_file(path: String, palette := PackedByteArray()) -> WadPack:
 	return pack
 
 
+# Reads one miptex record at `base` and files it under `name`. A compiled BSP
+# embeds exactly the records a WAD3 holds, palette and all, so the BSP importer
+# borrows this decoder rather than growing a second copy of the palette rules.
+func add_miptex(f: FileAccess, base: int, name: String) -> bool:
+	var img := _read_miptex(f, base, true, PackedByteArray())
+	if img == null:
+		return false
+	textures[name.to_lower()] = img
+	if format.is_empty():
+		format = MAGIC_WAD3
+	return true
+
+
 func _read_miptex(f: FileAccess, base: int, wad3: bool, palette: PackedByteArray) -> Image:
 	f.seek(base)
 	var name := f.get_buffer(16).get_string_from_ascii()

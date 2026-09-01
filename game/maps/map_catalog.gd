@@ -4,9 +4,14 @@ extends RefCounted
 # Which maps exist and how to get one.
 #
 # Built-in maps are compiled from a shapes definition and live in a folder per
-# map (res://maps/<id>/) next to their baked sky faces. Community maps are .map
-# files under maps/community, addressed as "community/<name>", which is the
-# prefix the lobby and the protocol pass around.
+# map (res://maps/<id>/) next to their baked sky faces. Community maps live under
+# maps/community, addressed as "community/<name>", which is the prefix the lobby
+# and the protocol pass around.
+#
+# Two source formats are accepted. A .map is TrenchBroom's text brush list, read
+# with the WAD beside it. A .bsp is a compiled GoldSrc level, which is what a
+# released Quake-lineage map almost always ships as. The id carries no extension
+# either way, so nothing downstream has to care which one a level came from.
 
 # Preloaded by path rather than referenced by class name: headless tool runs
 # (sky bake, build checks) can start with a stale global class cache, where an
@@ -18,6 +23,7 @@ const BUILTIN_IDS: Array[String] = ["parkour", "skydeck"]
 
 const COMMUNITY_DIR := "res://maps/community"
 const COMMUNITY_PREFIX := "community/"
+const SOURCE_EXTENSIONS := ["map", "bsp"]
 
 # Importing a level parses text and solves every brush, so it is done once per
 # process rather than once per match.
@@ -52,8 +58,15 @@ static func is_community(map_id: String) -> bool:
 	return map_id.begins_with(COMMUNITY_PREFIX)
 
 
+# The file behind an id. A .map wins over a .bsp of the same name: if someone
+# has the brush source, that is the better level.
 static func map_path(map_id: String) -> String:
-	return "%s/%s.map" % [COMMUNITY_DIR, map_id.substr(COMMUNITY_PREFIX.length())]
+	var name := map_id.substr(COMMUNITY_PREFIX.length())
+	for ext: String in SOURCE_EXTENSIONS:
+		var path := "%s/%s.%s" % [COMMUNITY_DIR, name, ext]
+		if FileAccess.file_exists(path):
+			return path
+	return "%s/%s.map" % [COMMUNITY_DIR, name]
 
 
 # Imports a community map, or returns the cached level if it has already been
@@ -61,13 +74,19 @@ static func map_path(map_id: String) -> String:
 static func load_community(map_id: String) -> TbLevel:
 	if _cache.has(map_id):
 		return _cache[map_id]
-	var level := TbImporter.import_file(map_path(map_id))
+	var path := map_path(map_id)
+	var level: TbLevel
+	if path.get_extension().to_lower() == "bsp":
+		level = BspImporter.import_file(path)
+	else:
+		level = TbImporter.import_file(path)
 	_cache[map_id] = level
 	return level
 
 
-# Every .map sitting in the community directory, as ids ready to hand back.
+# Every level sitting in the community directory, as ids ready to hand back.
 static func list_community() -> Array[String]:
+	var seen: Dictionary = {}
 	var out: Array[String] = []
 	var dir := DirAccess.open(COMMUNITY_DIR)
 	if dir == null:
@@ -75,8 +94,14 @@ static func list_community() -> Array[String]:
 	for file in dir.get_files():
 		# Exported builds hand back the import stub rather than the file itself.
 		var name := String(file).trim_suffix(".remap")
-		if name.get_extension() == "map":
-			out.append(COMMUNITY_PREFIX + name.get_basename())
+		if not SOURCE_EXTENSIONS.has(name.get_extension().to_lower()):
+			continue
+		# A level shipping both a .map and a .bsp is one entry, not two.
+		var id := COMMUNITY_PREFIX + name.get_basename()
+		if seen.has(id):
+			continue
+		seen[id] = true
+		out.append(id)
 	out.sort()
 	return out
 

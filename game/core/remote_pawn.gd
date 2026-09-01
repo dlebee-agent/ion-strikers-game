@@ -42,6 +42,9 @@ var _last_eye_crouched: bool = false
 var _charge_orb: ChargeOrb
 var ragdoll: Ragdoll
 var _ragdoll_frozen := false
+# True when this player was already dead in the first snapshot we saw of them,
+# so their body is parked out of sight rather than ragdolled.
+var _joined_dead := false
 
 
 func setup(p_id: int, p_name: String, p_team: int) -> void:
@@ -49,6 +52,20 @@ func setup(p_id: int, p_name: String, p_team: int) -> void:
 	display_name = p_name
 	team = p_team
 	_load_mannequin()
+
+
+# A player who was already dead when we first saw them has no death for us to
+# play: there is no alive→dead edge for the ragdoll to hang off, so the body
+# would stand in its idle pose looking like a live target that never takes a
+# hit. Seed the dead state up front and keep the body off screen until they
+# respawn.
+func adopt_initial_alive(is_alive: bool) -> void:
+	alive = is_alive
+	if is_alive:
+		return
+	_ragdoll_frozen = true
+	_joined_dead = true
+	set_body_visible(false)
 
 
 func _load_mannequin() -> void:
@@ -108,7 +125,28 @@ func _apply_tint() -> void:
 	TeamTint.apply_gun(_gun, color_str)
 
 
+## Faster than any pawn can travel under its own power. A gap wider than this
+## between two snapshots was not walked, it was teleported.
+const MAX_TRAVEL_SPEED := 16.0
+const TELEPORT_FLOOR := 1.0
+
+
 func push_snapshot(data: Dictionary, recv_time: float) -> void:
+	var pos := Vector3(
+		float(data.get("x", 0.0)), float(data.get("y", 0.0)), float(data.get("z", 0.0)))
+
+	# A respawn moves a body across the level between two snapshots. Interpolating
+	# that draws the bot travelling there in a straight line, through every wall
+	# on the way — which is what a bot flying through geometry actually is. Drop
+	# the history so the next frame starts fresh at the new place instead of
+	# easing into it.
+	if not _samples.is_empty():
+		var prev: Dictionary = _samples[_samples.size() - 1]
+		var gap: float = maxf(0.0, recv_time - float(prev["t"]))
+		var moved := pos.distance_to(Vector3(prev["x"], prev["y"], prev["z"]))
+		if moved > MAX_TRAVEL_SPEED * gap + TELEPORT_FLOOR:
+			_samples.clear()
+
 	_samples.append({
 		"t": recv_time,
 		"x": float(data.get("x", 0.0)),
@@ -134,9 +172,16 @@ func interpolate(now: float) -> void:
 
 	_render_time = now - INTERP_DELAY_MS / 1000.0
 
+	# Render time before the buffer starts is a different situation from render
+	# time after it ends, and the old search could not tell them apart: neither
+	# case broke out of the loop, so both fell through holding the newest pair.
+	# Ahead of the buffer that is right — hold the newest pose. Behind it, it
+	# threw the buffer away and jumped the body forward to nearly-live.
 	var a: Dictionary = _samples[0]
-	var b: Dictionary = _samples[0]
-
+	var b: Dictionary = _samples[1]
+	if _render_time <= float(_samples[0]["t"]):
+		_apply_pose(_samples[0])
+		return
 	for i in range(_samples.size() - 1):
 		a = _samples[i]
 		b = _samples[i + 1]
@@ -240,6 +285,11 @@ func _apply_pose(pose: Dictionary) -> void:
 		if _anim_driver:
 			_anim_driver.reset_locomotion()
 		_ragdoll_frozen = false
+		_joined_dead = false
+		# Both a settled ragdoll and a join-while-dead leave the mannequin
+		# hidden, and nothing else turns it back on. Without this a respawned
+		# player is invisible for the rest of the match.
+		set_body_visible(true)
 	alive = now_alive
 	visible = true
 
@@ -324,7 +374,7 @@ func end_ragdoll() -> void:
 
 func tick_ragdoll(dt: float, world: CollisionWorld) -> void:
 	if ragdoll:
-		ragdoll.update(dt, world)
+		ragdoll.update(dt, world, world.void_y() if world != null else -INF)
 		if ragdoll.dead:
 			set_body_visible(false)
 			end_ragdoll()

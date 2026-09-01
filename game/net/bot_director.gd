@@ -5,7 +5,6 @@ extends RefCounted
 ## per-bot state lives in Participant.connection_session["ai"].
 
 const BOT_TARGET_PER_TEAM := 3
-const BOT_SPEED := 6.6
 const BOT_NAMES: Array[String] = [
 	"Vortex", "Ghost", "Razor", "Nova", "Echo", "Blitz", "Cobra", "Ace",
 	"Fury", "Jinx", "Rook", "Zero", "Havoc", "Sly", "Onyx", "Viper",
@@ -17,7 +16,6 @@ const MELEE_RANGE := 2.2
 const PLAYER_R := BotNav.BODY_RADIUS
 const BODY_HEIGHT := BotNav.BODY_HEIGHT
 const STEP_UP := BotNav.STEP_UP
-const FALL_ACCEL := 20.32
 
 const THINK_INTERVAL := 0.09
 const MEMORY_TIME := 5.0
@@ -177,6 +175,10 @@ func init_ai(p: Participant) -> void:
 		"fov": s.get("fov", pr.get("fov", 130.0)),
 		"sight": s.get("sight", pr.get("sight", 30.0)),
 		"speed": s.get("speed", pr.get("speed", 0.85)),
+		# The same solver a player is moved by. There is no second movement
+		# model for bots any more: everything about how a body slides, steps,
+		# lands and crouches lives in Movement and is tested there.
+		"mover": Movement.new(),
 		"idle_chance": s.get("idle_chance", pr.get("idle_chance", 0.30)),
 		"idle_time_lo": s.get("idle_time_lo", pr.get("idle_time_lo", 0.8)),
 		"idle_time_hi": s.get("idle_time_hi", pr.get("idle_time_hi", 2.0)),
@@ -209,7 +211,6 @@ func init_ai(p: Participant) -> void:
 		"next_melee": 0.0,
 		"special_until": 0.0,
 		"special_dither_until": 0.0,
-		"vy": 0.0,
 		"wish": Vector3.ZERO,
 		"separation": Vector3.ZERO,
 		"stuck": 0,
@@ -278,9 +279,6 @@ func update_bot(p: Participant, pawn: ServerPawn, all_participants: Dictionary,
 	if engaged:
 		ai["idle_until"] = 0.0
 
-	# Apply crouch state to the pawn so snapshots propagate it.
-	pawn.crouched = bool(ai["want_crouch"])
-
 	var wish := Vector3.ZERO
 	if bots_move:
 		var state: String = ai["state"]
@@ -322,7 +320,14 @@ func _on_respawn(ai: Dictionary, pawn: ServerPawn) -> void:
 	ai["path_i"] = 0
 	ai["has_goal"] = false
 	ai["repath_at"] = 0.0
-	ai["vy"] = 0.0
+	# A respawn is a fresh pawn at a fresh place; the solver must not carry the
+	# old body's velocity or crouch into it.
+	var mover: Movement = ai["mover"]
+	mover.position = pawn.position
+	mover.velocity = Vector3.ZERO
+	mover.on_ground = true
+	mover.is_crouching = false
+	mover.crouch_fraction = 0.0
 	ai["stuck"] = 0
 	ai["unstick_until"] = 0.0
 	ai["force_path_until"] = 0.0
@@ -673,48 +678,29 @@ func _combat_wish(pawn: ServerPawn, ai: Dictionary, target_pawn: ServerPawn, now
 
 func _apply_motion(pawn: ServerPawn, ai: Dictionary, wish: Vector3, dt: float) -> void:
 	var dir := Vector3(wish.x, 0.0, wish.z)
-	var speed := dir.length()
-	dir = dir / speed if speed > 0.001 else Vector3.ZERO
+	dir = dir.normalized() if dir.length_squared() > 0.001 else Vector3.ZERO
 	ai["wish"] = dir
 
-	var move_speed := BOT_SPEED * float(ai.get("speed", 1.0))
-	if bool(ai["want_crouch"]):
-		move_speed *= Movement.DUCK_MOD
+	# The pawn is the record and the mover is the solver: sync in, solve, sync
+	# out. Reading position back every tick is also what makes a respawn — which
+	# swaps in a fresh pawn at the spawn point — land on the solver for free.
+	var mover: Movement = ai["mover"]
+	mover.position = pawn.position
+	mover.yaw = rad_to_deg(float(ai["yaw"]))
+	mover.speed_scale = float(ai.get("speed", 1.0))
 
-	var feet := pawn.position.y
-	var nx := pawn.position.x + dir.x * move_speed * dt
-	var nz := pawn.position.z + dir.z * move_speed * dt
+	if nav.world == null:
+		pawn.position += dir * Movement.RUN_SPEED * mover.speed_scale * dt
+		return
 
-	if nav.world != null:
-		var clearance := BODY_HEIGHT - STEP_UP
-		var half := Vector3(PLAYER_R, clearance * 0.5, PLAYER_R)
-		var push := nav.world.depenetrate(Vector3(nx, feet + STEP_UP + half.y, nz), half)
-		nx += push.x
-		nz += push.z
+	# Movement steers relative to its own facing; the bot thinks in world space.
+	# The basis is orthonormal and the wish is flat, so this loses nothing.
+	mover.update(dt, dir.dot(mover.get_forward()), dir.dot(mover.get_right()),
+		false, bool(ai["want_crouch"]), false, nav.world)
 
-	var lim := _arena_size - 0.8
-	nx = clampf(nx, -lim, lim)
-	nz = clampf(nz, -lim, lim)
-
-	var support := nav.surface_at(nx, nz, feet + STEP_UP)
-	if support == -INF:
-		support = 0.0
-
-	if support >= feet:
-		feet = support
-		ai["vy"] = 0.0
-		pawn.grounded = true
-	else:
-		var vy := float(ai["vy"]) - FALL_ACCEL * dt
-		feet += vy * dt
-		pawn.grounded = false
-		if feet <= support:
-			feet = support
-			vy = 0.0
-			pawn.grounded = true
-		ai["vy"] = vy
-
-	pawn.position = Vector3(nx, feet, nz)
+	pawn.position = mover.position
+	pawn.grounded = mover.on_ground
+	pawn.crouched = mover.is_crouching
 
 
 # ── aiming ───────────────────────────────────────────────────────────────

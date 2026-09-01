@@ -23,7 +23,14 @@ var _deny: Label
 var _deny_wrap: Control
 var _foot_left: Label
 var _foot_right: Label
+var _auto: Button
 var _is_open := false
+
+# Latest counts from the server's teamOpts, so AUTO picks against the same
+# numbers setTeam will be validated against.
+var _blue_used := 0
+var _red_used := 0
+var _opts_seen := false
 
 
 func _init() -> void:
@@ -87,6 +94,18 @@ func _build() -> void:
 	_spec.pressed.connect(func() -> void: _try_pick(Protocol.TEAM_NONE))
 	cards.add_child(_spec)
 
+	_auto = Button.new()
+	_auto.focus_mode = Control.FOCUS_NONE
+	_auto.custom_minimum_size = Vector2(CARD_W * 3 + 32, 40)
+	_auto.text = MenuLook.tracked("[4]  AUTO \u00b7 JOIN THE LIGHTER SIDE")
+	MenuLook.apply_ghost(_auto, 12)
+	_auto.disabled = true
+	_auto.pressed.connect(_pick_auto)
+	var auto_m := MarginContainer.new()
+	auto_m.add_theme_constant_override("margin_top", 12)
+	auto_m.add_child(_auto)
+	col.add_child(auto_m)
+
 	_deny = MenuLook.kicker("", MenuLook.RD, 10)
 	_deny.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var deny_m := MarginContainer.new()
@@ -149,6 +168,12 @@ func update_opts(current_team: int, blue_used: int, blue_max: int,
 	_blue.set_state(current_team == Protocol.TEAM_BLUE, blue_used, blue_max)
 	_red.set_state(current_team == Protocol.TEAM_RED, red_used, red_max)
 	_spec.set_state(current_team == Protocol.TEAM_NONE, spec_used, spec_max)
+	_blue_used = blue_used
+	_red_used = red_used
+	_opts_seen = true
+	# AUTO stays dead until the first teamOpts lands, or its "lighter side"
+	# would be a coin flip against counts of 0 and 0.
+	_auto.disabled = false
 	_clear_deny()
 
 
@@ -170,6 +195,29 @@ func _try_pick(team: int) -> void:
 		show_denied("Team is full." if team != Protocol.TEAM_NONE else "Stands are full.")
 		return
 	team_selected.emit(team)
+
+
+# Fewer humans wins; a tie is a coin flip. The server counts humans only, so
+# bots never make a side look heavy, and picking the lighter side can never trip
+# its "teams would be unbalanced" check.
+func _pick_auto() -> void:
+	if not _opts_seen:
+		return
+	var first := Protocol.TEAM_BLUE
+	var second := Protocol.TEAM_RED
+	if _red_used < _blue_used or (_red_used == _blue_used and randi() % 2 == 1):
+		first = Protocol.TEAM_RED
+		second = Protocol.TEAM_BLUE
+
+	for team in [first, second]:
+		var card := _card_for(team)
+		if card.is_current:
+			close()
+			return
+		if not card.is_full:
+			team_selected.emit(team)
+			return
+	show_denied("Both teams are full.")
 
 
 func _card_for(team: int) -> PickCard:
@@ -211,6 +259,9 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			KEY_3, KEY_KP_3:
 				_try_pick(Protocol.TEAM_NONE)
+				get_viewport().set_input_as_handled()
+			KEY_4, KEY_KP_4:
+				_pick_auto()
 				get_viewport().set_input_as_handled()
 
 
