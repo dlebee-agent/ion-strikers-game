@@ -61,7 +61,7 @@ func present(winner: int, score_blue: int, score_red: int, round_num: int, match
 	_blue_tag.add_theme_color_override("font_color", Color(accent, 0.7) if blue_win else MenuLook.MUTE_2)
 	_red_tag.add_theme_color_override("font_color", Color(accent, 0.7) if not blue_win and not draw else MenuLook.MUTE_2)
 
-	_show()
+	_show(match_over)
 
 
 # The line above the result, saying how the round was actually decided.
@@ -81,7 +81,7 @@ static func _detail(winner: int, reason: int) -> String:
 			return "%s TEAM ELIMINATED" % loser
 
 
-func _show() -> void:
+func _show(match_over: bool) -> void:
 	visible = true
 	modulate.a = 0.0
 	_rule_top.custom_minimum_size.x = 36.0

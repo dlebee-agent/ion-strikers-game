@@ -49,12 +49,12 @@ var _shake := CameraShake.new()
 var _last_death: Dictionary = {}  # target_id -> { by, head, cause }
 var _local_ragdoll: Ragdoll
 
-## Score bar clock, as the server last reported it: seconds, and whether it
-## counts down to something. The server owns it so every client reads the
-## same thing and a late joiner sees the real time left in the round rather
-## than their own time since loading.
+## Score bar clock, as the server last reported it: seconds, and which of
+## Protocol's CLOCK_ modes to read them as. The server owns it so every
+## client reads the same thing and a late joiner sees the real time left in
+## the round rather than their own time since loading.
 var _clock_s: int = 0
-var _clock_down: bool = false
+var _clock_mode: int = Protocol.CLOCK_UP
 var _win_rounds: int = 10
 var _max_spectators: int = 0
 var _last_kill_target: int = 50
@@ -578,7 +578,7 @@ func _on_snap(snap: Dictionary) -> void:
 	var snap_kill_target := int(snap.get("kill_target", 50))
 	_win_rounds = int(snap.get("win_rounds", _win_rounds))
 	_clock_s = int(snap.get("clock_s", _clock_s))
-	_clock_down = bool(snap.get("clock_down", _clock_down))
+	_clock_mode = int(snap.get("clock_mode", _clock_mode))
 	_mode = snap_mode
 	_last_kill_target = snap_kill_target
 	if _match_over:

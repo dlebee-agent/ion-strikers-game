@@ -14,6 +14,11 @@ const END_ELIMINATION := 0
 const END_TIME := 1
 const END_FORFEIT := 2
 
+# How to read the clock a snap carries. It always runs, so there is no
+# third state for a stopped one.
+const CLOCK_UP := 0
+const CLOCK_DOWN := 1
+
 const MODE_CLASSIC := 0
 const MODE_DM := 1
 
@@ -246,7 +251,7 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["kill_target"] = b.get_u16()
 			d["win_rounds"] = b.get_u16()
 			d["clock_s"] = b.get_u16()
-			d["clock_down"] = b.get_u8() != 0
+			d["clock_mode"] = b.get_u8()
 			var count := b.get_u8()
 			var players: Array[Dictionary] = []
 			for _i in count:
@@ -535,12 +540,12 @@ static func encode_state(
 
 # clock_s is whatever the score bar should read, in seconds, already decided
 # by the server: time left where there is a limit, time elapsed where there
-# is not. clock_down says which, so the client renders rather than rules on
+# is not. clock_mode says which, so the client renders rather than rules on
 # it. Both ride the snap because the clock has to survive a dropped packet.
 static func encode_snap(
 		score_blue: int, score_red: int, round_num: int,
 		round_state: int, mode: int, kill_target: int, win_rounds: int,
-		players: Array, clock_s: int = 0, clock_down: bool = false) -> PackedByteArray:
+		players: Array, clock_s: int = 0, clock_mode: int = CLOCK_UP) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.SNAP)
 	b.put_u8(0)
@@ -552,7 +557,7 @@ static func encode_snap(
 	b.put_u16(kill_target)
 	b.put_u16(win_rounds)
 	b.put_u16(clampi(clock_s, 0, 65535))
-	b.put_u8(1 if clock_down else 0)
+	b.put_u8(clock_mode)
 	b.put_u8(players.size())
 	for p: Dictionary in players:
 		b.put_32(p["id"])

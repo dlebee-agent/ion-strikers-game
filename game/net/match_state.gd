@@ -38,13 +38,15 @@ var match_point_announced: bool = false
 var round_end_at: float = 0.0
 
 ## Instance clock the running round expires on, and the same for a whole
-## deathmatch. Zero means no clock is running.
+## deathmatch. Zero arms on the next tick.
 var round_ends_at: float = 0.0
 var match_ends_at: float = 0.0
-## A round only decides itself once both sides have someone on them. Until
-## then the lobby is still filling, and neither the clock running out nor a
-## team sitting empty should hand anyone a round.
-var round_live: bool = false
+## Whether each side has had anyone on it at any point this round. A side
+## that emptied out forfeits; a side nobody ever joined is just a lobby
+## short of players, and handing its rounds to whoever did join would have
+## a solo host winning the match by themselves.
+var round_had_blue: bool = false
+var round_had_red: bool = false
 
 var pending_meteor: Dictionary = {}
 var next_meteor_at: float = 0.0

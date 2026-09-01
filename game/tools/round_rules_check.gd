@@ -58,11 +58,24 @@ func _leaving_ends_round() -> void:
 func _lone_team_waits() -> void:
 	var inst := _match("classic")
 	_join(inst, 1, Protocol.TEAM_BLUE)
-	# Two full round lengths with nobody to play against.
+	# The clock has to be running even with nobody to play against: a
+	# stopped one is what a player reads as a broken game.
+	var early := _snap_clock(inst)
+	inst.tick(DT)
+	_run(inst, 10.0)
+	var later := _snap_clock(inst)
+	_expect("solo", later[1] == Protocol.CLOCK_DOWN, "clock counts down when alone")
+	_expect("solo", later[0] < early[0], "clock actually moves when alone")
+
+	# It resets the round on expiry, but scores nothing: there was nobody
+	# to beat. A solo host must not win the match a round at a time.
 	_run(inst, MatchState.ROUND_TIME_S * 2.0)
-	_expect("lone team", _ends.is_empty(), "no round awarded while a side is empty")
-	_expect("lone team", inst.match_state.score_blue == 0, "no score")
-	print("  %-10s %d rounds awarded over two round lengths" % ["lone team", _ends.size()])
+	_expect("solo", inst.match_state.score_blue == 0, "no score with nobody to beat")
+	for e in _ends:
+		_expect("solo", int(e.get("winner", -1)) == Protocol.TEAM_NONE,
+			"uncontested rounds are draws")
+	print("  %-10s clock %d then %d, %d rounds, all drawn, score %d" % [
+		"solo", early[0], later[0], _ends.size(), inst.match_state.score_blue])
 	_free(inst)
 
 
@@ -122,15 +135,14 @@ func _clock_counts_down() -> void:
 	_join(inst, 2, Protocol.TEAM_RED)
 	inst.tick(DT)
 	var first := _snap_clock(inst)
-	_expect("countdown", first[1], "classic clock counts down")
+	_expect("countdown", first[1] == Protocol.CLOCK_DOWN, "classic clock counts down")
 	_expect("countdown", first[0] <= int(MatchState.ROUND_TIME_S),
 		"starts at the round length")
 	_run(inst, 10.0)
 	var later := _snap_clock(inst)
 	_expect("countdown", later[0] < first[0],
 		"reads lower ten seconds in (%d then %d)" % [first[0], later[0]])
-	print("  %-10s %d then %d, counting %s" % [
-		"countdown", first[0], later[0], "down" if later[1] else "up"])
+	print("  %-10s %d then %d, mode %d" % ["countdown", first[0], later[0], later[1]])
 	_free(inst)
 
 
@@ -168,7 +180,7 @@ func _run(inst: GameInstance, seconds: float) -> void:
 
 func _snap_clock(inst: GameInstance) -> Array:
 	var snap := Protocol.decode(inst.build_snap())
-	return [int(snap.get("clock_s", -1)), bool(snap.get("clock_down", false))]
+	return [int(snap.get("clock_s", -1)), int(snap.get("clock_mode", -1))]
 
 
 func _free(inst: GameInstance) -> void:
