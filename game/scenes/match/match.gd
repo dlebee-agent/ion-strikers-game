@@ -49,9 +49,12 @@ var _shake := CameraShake.new()
 var _last_death: Dictionary = {}  # target_id -> { by, head, cause }
 var _local_ragdoll: Ragdoll
 
-## Cosmetic clock for the score bar. The server has no round time limit, so this
-## counts up from the last round start (match start in deathmatch).
-var _clock_start: float = 0.0
+## Score bar clock, as the server last reported it: seconds, and whether it
+## counts down to something. The server owns it so every client reads the
+## same thing and a late joiner sees the real time left in the round rather
+## than their own time since loading.
+var _clock_s: int = 0
+var _clock_down: bool = false
 var _win_rounds: int = 10
 var _max_spectators: int = 0
 var _last_kill_target: int = 50
@@ -73,7 +76,6 @@ func _ready() -> void:
 	_mode = str(init_data.get("mode", "classic"))
 	_win_rounds = int(init_data.get("win_rounds", 10))
 	_max_spectators = int(init_data.get("max_spectators", 0))
-	_clock_start = Time.get_ticks_msec() / 1000.0
 	client = game_client
 	var my_init_id := int(init_data.get("id", 0))
 	if my_init_id != 0:
@@ -575,6 +577,8 @@ func _on_snap(snap: Dictionary) -> void:
 	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "classic"
 	var snap_kill_target := int(snap.get("kill_target", 50))
 	_win_rounds = int(snap.get("win_rounds", _win_rounds))
+	_clock_s = int(snap.get("clock_s", _clock_s))
+	_clock_down = bool(snap.get("clock_down", _clock_down))
 	_mode = snap_mode
 	_last_kill_target = snap_kill_target
 	if _match_over:
@@ -759,7 +763,6 @@ func _on_tracer(msg: Dictionary) -> void:
 
 
 func _on_round_start(msg: Dictionary) -> void:
-	_clock_start = Time.get_ticks_msec() / 1000.0
 	_hud.hide_round_end()
 	_hud.show_banner("ROUND %d" % int(msg.get("round_num", 1)), MatchHud.WHITE)
 	if Announcer:
@@ -776,7 +779,8 @@ func _on_round_end(msg: Dictionary) -> void:
 	_last_score_blue = score_blue
 	_last_score_red = score_red
 	_last_round_num = round_num
-	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over)
+	var reason := int(msg.get("reason", Protocol.END_ELIMINATION))
+	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over, reason)
 	if match_over:
 		_enter_match_over(winner)
 	if Announcer:
@@ -921,8 +925,7 @@ func _on_cheats_denied() -> void:
 
 
 func _clock_text() -> String:
-	var elapsed := int(maxf(0.0, Time.get_ticks_msec() / 1000.0 - _clock_start))
-	return "%d:%02d" % [elapsed / 60, elapsed % 60]
+	return "%d:%02d" % [_clock_s / 60, _clock_s % 60]
 
 
 func _sync_special_hud() -> void:

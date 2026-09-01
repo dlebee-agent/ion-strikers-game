@@ -32,19 +32,23 @@ func _init() -> void:
 	_build()
 
 
-func present(winner: int, score_blue: int, score_red: int, round_num: int, match_over: bool) -> void:
+func present(winner: int, score_blue: int, score_red: int, round_num: int, match_over: bool,
+		reason: int = Protocol.END_ELIMINATION) -> void:
 	var blue_win := winner == Protocol.TEAM_BLUE
-	var accent := MenuLook.CY if blue_win else MenuLook.RD
-	var loser := "RED" if blue_win else "BLUE"
+	var draw := winner == Protocol.TEAM_NONE
+	# A draw belongs to neither side, so it wears neither side's colour and
+	# leaves both scores muted.
+	var accent := MenuLook.MUTE if draw else (MenuLook.CY if blue_win else MenuLook.RD)
 
+	var detail := _detail(winner, reason)
 	if match_over and round_num <= 0:
 		_header.text = MenuLook.tracked("MATCH OVER")
 	elif match_over:
-		_header.text = MenuLook.tracked("MATCH OVER · %s TEAM ELIMINATED" % loser)
+		_header.text = MenuLook.tracked("MATCH OVER · %s" % detail)
 	else:
-		_header.text = MenuLook.tracked("ROUND %d · %s TEAM ELIMINATED" % [round_num, loser])
+		_header.text = MenuLook.tracked("ROUND %d · %s" % [round_num, detail])
 
-	_title.text = "BLUE WINS" if blue_win else "RED WINS"
+	_title.text = "DRAW" if draw else ("BLUE WINS" if blue_win else "RED WINS")
 	_title.add_theme_color_override("font_color", accent)
 	_rule_top.color = Color(accent, 0.9)
 	_rule_bot.color = Color(accent, 0.9)
@@ -53,10 +57,31 @@ func present(winner: int, score_blue: int, score_red: int, round_num: int, match
 	_blue_score.text = str(score_blue)
 	_red_score.text = str(score_red)
 	_blue_score.add_theme_color_override("font_color", accent if blue_win else MenuLook.MUTE)
-	_red_score.add_theme_color_override("font_color", accent if not blue_win else MenuLook.MUTE)
+	_red_score.add_theme_color_override("font_color", accent if not blue_win and not draw else MenuLook.MUTE)
 	_blue_tag.add_theme_color_override("font_color", Color(accent, 0.7) if blue_win else MenuLook.MUTE_2)
-	_red_tag.add_theme_color_override("font_color", Color(accent, 0.7) if not blue_win else MenuLook.MUTE_2)
+	_red_tag.add_theme_color_override("font_color", Color(accent, 0.7) if not blue_win and not draw else MenuLook.MUTE_2)
 
+	_show()
+
+
+# The line above the result, saying how the round was actually decided.
+# "TEAM ELIMINATED" was true when that was the only way to end one.
+static func _detail(winner: int, reason: int) -> String:
+	var loser := "RED" if winner == Protocol.TEAM_BLUE else "BLUE"
+	match reason:
+		Protocol.END_TIME:
+			if winner == Protocol.TEAM_NONE:
+				return "TIME UP · LEVEL"
+			return "TIME UP · %s AHEAD" % ("BLUE" if winner == Protocol.TEAM_BLUE else "RED")
+		Protocol.END_FORFEIT:
+			return "%s TEAM LEFT" % loser
+		_:
+			if winner == Protocol.TEAM_NONE:
+				return "BOTH TEAMS DOWN"
+			return "%s TEAM ELIMINATED" % loser
+
+
+func _show() -> void:
 	visible = true
 	modulate.a = 0.0
 	_rule_top.custom_minimum_size.x = 36.0

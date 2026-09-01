@@ -19,6 +19,21 @@ func _initialize() -> void:
 	var empty := Protocol.decode(Protocol.encode_hello([]))
 	_check(Array(empty.get("maps", ["x"])).is_empty(), "hello with no maps")
 
+	# The score bar clock rides the snap, so it has to survive the trip
+	# alongside the player list rather than only on its own.
+	var snap := Protocol.decode(Protocol.encode_snap(
+		3, 4, 2, Protocol.RS_ACTIVE, Protocol.MODE_CLASSIC, 50, 10, [], 95, true))
+	_check(int(snap.get("clock_s", -1)) == 95, "snap carries the clock")
+	_check(bool(snap.get("clock_down", false)), "snap carries the clock direction")
+	_check(int(snap.get("round_num", -1)) == 2, "snap fields after the clock still read")
+
+	# A drawn round: no winner, and a reason that is not elimination.
+	var drawn := Protocol.decode(Protocol.encode_round_end(
+		Protocol.TEAM_NONE, 5, 5, false, false, 7, Protocol.END_TIME))
+	_check(int(drawn.get("winner", -1)) == Protocol.TEAM_NONE, "round end carries a draw")
+	_check(int(drawn.get("reason", -1)) == Protocol.END_TIME, "round end carries its reason")
+	_check(int(drawn.get("round_num", -1)) == 7, "round end number survives")
+
 	# A type value one past everything this build knows: decode must hand back
 	# just the header, the shape older builds see when a HELLO arrives.
 	var b := StreamPeerBuffer.new()

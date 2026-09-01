@@ -486,10 +486,27 @@ func build_snap() -> PackedByteArray:
 		players.append(entry)
 
 	var mode_int := Protocol.MODE_DM if mode == "dm" else Protocol.MODE_CLASSIC
+	var clock := _clock_reading()
 	return Protocol.encode_snap(
 		match_state.score_blue, match_state.score_red, match_state.round_num,
 		match_state.round_state, mode_int, match_state.kill_target,
-		match_state.win_rounds, players)
+		match_state.win_rounds, players, clock[0], clock[1])
+
+
+# What the score bar should read, as [seconds, counts_down]. Decided here so
+# every client agrees on it and someone joining late picks it up correct,
+# rather than each running its own timer from whenever it happened to load.
+# A clock that has not started yet shows its full length, standing still.
+func _clock_reading() -> Array:
+	if mode == "dm":
+		if MatchState.DM_TIME_S <= 0.0:
+			return [int(maxf(0.0, _now)), false]
+		if match_state.match_ends_at <= 0.0:
+			return [int(MatchState.DM_TIME_S), true]
+		return [int(ceilf(maxf(0.0, match_state.match_ends_at - _now))), true]
+	if not match_state.round_live:
+		return [int(MatchState.ROUND_TIME_S), true]
+	return [int(ceilf(maxf(0.0, match_state.round_ends_at - _now))), true]
 
 
 # ── Internals ────────────────────────────────────────────────────────────
@@ -505,7 +522,9 @@ func _tick_match(_dt: float) -> void:
 
 	_check_out_of_bounds()
 
-	if mode == "classic":
+	if mode == "dm":
+		_check_dm_time()
+	else:
 		_check_classic_round()
 
 
@@ -531,41 +550,108 @@ func _check_out_of_bounds() -> void:
 		_apply_damage(pid, 0, VOID_DAMAGE, false, Protocol.CAUSE_VOID)
 
 
-func _check_classic_round() -> void:
-	var blue_alive := 0
-	var red_alive := 0
-	var blue_total := 0
-	var red_total := 0
-
-	for pid: int in participants:
-		var p: Participant = participants[pid]
-		if p.team == Protocol.TEAM_BLUE:
-			blue_total += 1
-			if pawns.has(pid) and pawns[pid].alive:
-				blue_alive += 1
-		elif p.team == Protocol.TEAM_RED:
-			red_total += 1
-			if pawns.has(pid) and pawns[pid].alive:
-				red_alive += 1
-
-	if blue_total == 0 or red_total == 0:
+# Deathmatch is played to the kill target; the clock is only here so a
+# lobby that never gets there still finishes. It starts when the first
+# player arrives rather than when the lobby is created, or an idle lobby
+# would burn the whole match down waiting for someone to join.
+func _check_dm_time() -> void:
+	if match_state.match_ends_at <= 0.0:
+		if MatchState.DM_TIME_S > 0.0 and not participants.is_empty():
+			match_state.match_ends_at = _now + MatchState.DM_TIME_S
+		return
+	if _now < match_state.match_ends_at:
 		return
 
-	var winner := 0
-	if blue_alive == 0 and red_alive > 0:
-		winner = Protocol.TEAM_RED
-	elif red_alive == 0 and blue_alive > 0:
+	var winner := Protocol.TEAM_NONE
+	if match_state.score_blue > match_state.score_red:
 		winner = Protocol.TEAM_BLUE
+	elif match_state.score_red > match_state.score_blue:
+		winner = Protocol.TEAM_RED
 
-	if winner != 0:
-		_award_round(winner)
+	match_state.round_state = Protocol.RS_OVER
+	match_state.winner = winner
+	event_broadcast.emit(Protocol.CH_EVENTS,
+		Protocol.encode_round_end(winner, match_state.score_blue, match_state.score_red,
+			true, false, match_state.round_num, Protocol.END_TIME), -1)
+	_broadcast_match_over(winner)
 
 
-func _award_round(winner: int) -> void:
+# A classic round ends three ways: one side is wiped out, one side empties
+# because everyone on it left or went to spectate, or the clock runs out.
+# The middle one matters as much as the first: a round waiting on a team
+# with nobody left to kill would sit there forever.
+func _check_classic_round() -> void:
+	var blue := _team_standing(Protocol.TEAM_BLUE)
+	var red := _team_standing(Protocol.TEAM_RED)
+
+	# Nothing decides a round until both sides have someone on them. Before
+	# that the lobby is still filling, and the clock has not started.
+	if not match_state.round_live:
+		if blue["total"] == 0 or red["total"] == 0:
+			return
+		match_state.round_live = true
+		match_state.round_ends_at = _now + MatchState.ROUND_TIME_S
+
+	if blue["total"] == 0 or red["total"] == 0:
+		# Everyone on one side left. If they both did there is no one to
+		# award it to, so let it stand until somebody joins.
+		if blue["total"] == 0 and red["total"] == 0:
+			return
+		_award_round(
+			Protocol.TEAM_RED if blue["total"] == 0 else Protocol.TEAM_BLUE,
+			Protocol.END_FORFEIT)
+		return
+
+	if blue["alive"] == 0 or red["alive"] == 0:
+		var wiped := Protocol.TEAM_NONE
+		if blue["alive"] > 0:
+			wiped = Protocol.TEAM_BLUE
+		elif red["alive"] > 0:
+			wiped = Protocol.TEAM_RED
+		# Both sides going down together is a draw, not a win for whoever
+		# the comparison happens to fall through to.
+		_award_round(wiped, Protocol.END_ELIMINATION)
+		return
+
+	if _now >= match_state.round_ends_at:
+		_award_round(_time_winner(blue, red), Protocol.END_TIME)
+
+
+# Who is on a team and how they are doing, as one pass over the roster.
+func _team_standing(team: int) -> Dictionary:
+	var total := 0
+	var alive := 0
+	var hp := 0
+	for pid: int in participants:
+		if participants[pid].team != team:
+			continue
+		total += 1
+		if pawns.has(pid) and (pawns[pid] as ServerPawn).alive:
+			alive += 1
+			hp += maxi((pawns[pid] as ServerPawn).hp, 0)
+	return {"total": total, "alive": alive, "hp": hp}
+
+
+# Time ran out with both sides still standing, so it goes to whoever is in
+# better shape: more players up, and failing that more health between them.
+# Dead level is a draw.
+func _time_winner(blue: Dictionary, red: Dictionary) -> int:
+	if blue["alive"] != red["alive"]:
+		return Protocol.TEAM_BLUE if blue["alive"] > red["alive"] else Protocol.TEAM_RED
+	if blue["hp"] != red["hp"]:
+		return Protocol.TEAM_BLUE if blue["hp"] > red["hp"] else Protocol.TEAM_RED
+	return Protocol.TEAM_NONE
+
+
+func _award_round(winner: int, reason: int) -> void:
+	# A draw closes the round out without scoring for either side.
 	if winner == Protocol.TEAM_BLUE:
 		match_state.score_blue += 1
-	else:
+	elif winner == Protocol.TEAM_RED:
 		match_state.score_red += 1
+
+	match_state.round_ends_at = 0.0
+	match_state.round_live = false
 
 	var match_over := false
 	var match_point := false
@@ -583,7 +669,7 @@ func _award_round(winner: int) -> void:
 
 	event_broadcast.emit(Protocol.CH_EVENTS,
 		Protocol.encode_round_end(winner, match_state.score_blue, match_state.score_red,
-			match_over, match_point, match_state.round_num), -1)
+			match_over, match_point, match_state.round_num, reason), -1)
 
 	if match_over:
 		_broadcast_match_over(winner)
@@ -592,6 +678,10 @@ func _award_round(winner: int) -> void:
 func _start_round() -> void:
 	match_state.round_num += 1
 	match_state.round_state = Protocol.RS_ACTIVE
+	# Left unarmed: the first tick of the round starts the clock, and only
+	# once both sides have someone standing on them.
+	match_state.round_live = false
+	match_state.round_ends_at = 0.0
 	match_state.first_blood_done = false
 	match_state.match_point_announced = false
 	match_state.pending_meteor = {}

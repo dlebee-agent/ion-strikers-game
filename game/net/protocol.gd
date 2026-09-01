@@ -6,7 +6,13 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 7
+const PROTOCOL_VERSION := 8
+
+# Why a round ended, so the overlay can say so rather than always claiming
+# the losing side was wiped out.
+const END_ELIMINATION := 0
+const END_TIME := 1
+const END_FORFEIT := 2
 
 const MODE_CLASSIC := 0
 const MODE_DM := 1
@@ -239,6 +245,8 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["mode"] = b.get_u8()
 			d["kill_target"] = b.get_u16()
 			d["win_rounds"] = b.get_u16()
+			d["clock_s"] = b.get_u16()
+			d["clock_down"] = b.get_u8() != 0
 			var count := b.get_u8()
 			var players: Array[Dictionary] = []
 			for _i in count:
@@ -320,6 +328,7 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["score_blue"] = b.get_u16()
 			d["score_red"] = b.get_u16()
 			d["round_num"] = b.get_u16()
+			d["reason"] = b.get_u8()
 		Msg.MATCH_OVER:
 			d["winner"] = b.get_u8()
 			d["score_blue"] = b.get_u16()
@@ -524,10 +533,14 @@ static func encode_state(
 	return b.data_array
 
 
+# clock_s is whatever the score bar should read, in seconds, already decided
+# by the server: time left where there is a limit, time elapsed where there
+# is not. clock_down says which, so the client renders rather than rules on
+# it. Both ride the snap because the clock has to survive a dropped packet.
 static func encode_snap(
 		score_blue: int, score_red: int, round_num: int,
 		round_state: int, mode: int, kill_target: int, win_rounds: int,
-		players: Array) -> PackedByteArray:
+		players: Array, clock_s: int = 0, clock_down: bool = false) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.SNAP)
 	b.put_u8(0)
@@ -538,6 +551,8 @@ static func encode_snap(
 	b.put_u8(mode)
 	b.put_u16(kill_target)
 	b.put_u16(win_rounds)
+	b.put_u16(clampi(clock_s, 0, 65535))
+	b.put_u8(1 if clock_down else 0)
 	b.put_u8(players.size())
 	for p: Dictionary in players:
 		b.put_32(p["id"])
@@ -689,9 +704,13 @@ static func encode_round_start(
 	return b.data_array
 
 
+# winner may be TEAM_NONE, which is a draw: nobody scores and the round
+# still advances. A clock can run out with both sides even, or with both
+# wiped out in the same instant.
 static func encode_round_end(
 		winner: int, score_blue: int, score_red: int,
-		match_over: bool, match_point: bool, round_num: int) -> PackedByteArray:
+		match_over: bool, match_point: bool, round_num: int,
+		reason: int = END_ELIMINATION) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.ROUND_END)
 	var flags := 0
@@ -704,6 +723,7 @@ static func encode_round_end(
 	b.put_u16(score_blue)
 	b.put_u16(score_red)
 	b.put_u16(round_num)
+	b.put_u8(reason)
 	return b.data_array
 
 
