@@ -54,6 +54,14 @@ VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName}
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersionCore}
+; CI passes /DEnableSign=1 and /Sazure=... so ISCC signs setup.exe and the
+; embedded uninstaller via Azure Artifact Signing (see sign-file.ps1).
+#ifdef EnableSign
+SignTool=azure
+SignedUninstaller=yes
+SignToolRetryCount=3
+SignToolRetryDelay=2000
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
