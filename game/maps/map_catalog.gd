@@ -3,9 +3,16 @@ extends RefCounted
 
 # Which maps exist and how to get one.
 #
-# Built-in maps are compiled from a shapes definition. Community maps are .map
+# Built-in maps are compiled from a shapes definition and live in a folder per
+# map (res://maps/<id>/) next to their baked sky faces. Community maps are .map
 # files under maps/community, addressed as "community/<name>", which is the
 # prefix the lobby and the protocol pass around.
+
+# Preloaded by path rather than referenced by class name: headless tool runs
+# (sky bake, build checks) can start with a stale global class cache, where an
+# unresolved class name fails this whole script's compile.
+const _ParkourMap := preload("res://maps/parkour/parkour.gd")
+const _GridArenaMap := preload("res://maps/grid_arena/grid_arena.gd")
 
 const COMMUNITY_DIR := "res://maps/community"
 const COMMUNITY_PREFIX := "community/"
@@ -20,9 +27,9 @@ static var _cache: Dictionary = {}
 static func builtin_definition(map_id: String) -> Dictionary:
 	match map_id:
 		"grid_arena":
-			return GridArenaMap.definition()
+			return _GridArenaMap.definition()
 		_:
-			return ParkourMap.definition()
+			return _ParkourMap.definition()
 
 
 static func is_community(map_id: String) -> bool:
@@ -67,7 +74,8 @@ static func display_name(map_id: String) -> String:
 	return map_id.substr(COMMUNITY_PREFIX.length()).capitalize()
 
 
-# Built-in maps give flat [x, z] pairs, on a floor at y=0, facing whichever way
+# Built-in maps give flat [x, z] pairs (optionally [x, z, y] on a raised
+# floor), on the ground at y=0 otherwise, facing whichever way
 # their team always faces. Imported maps carry a height and a per-point angle.
 # Everything downstream takes the richer shape, so the flat one is widened here
 # and there is only one spawn path to reason about.
@@ -77,8 +85,11 @@ static func normalize_spawns(flat: Dictionary) -> Dictionary:
 		var points: Array = []
 		var yaw := 180.0 if team == "blue" else 0.0
 		for entry: Array in flat[team]:
+			# An optional third number is a floor height, for spawn points
+			# that sit on a raised deck rather than the ground.
+			var y := float(entry[2]) if entry.size() > 2 else 0.0
 			points.append({
-				"position": Vector3(float(entry[0]), 0.0, float(entry[1])),
+				"position": Vector3(float(entry[0]), y, float(entry[1])),
 				"yaw": yaw,
 			})
 		out[team] = points
@@ -112,6 +123,6 @@ static func ambience_for(level: TbLevel) -> Dictionary:
 
 static func has_baked_sky(sky_id: String) -> bool:
 	for i in 6:
-		if not ResourceLoader.exists("res://maps/sky_%s_%d.png" % [sky_id, i]):
+		if not ResourceLoader.exists("res://maps/%s/sky_%d.png" % [sky_id, i]):
 			return false
 	return true

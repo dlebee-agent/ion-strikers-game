@@ -5,7 +5,10 @@ extends RefCounted
 # The model is a 60x40 deck with the teams split along its long axis; the
 # game keeps blue on -z and red on +z, so the model is rotated 90 degrees
 # here: model (x, z) -> game (z, x). Wedge ramps in the model become stairs
-# (STEP_LIP-sized rises) because the engine only solves boxes.
+# because the engine only solves boxes, and every stair keeps its climb at
+# or under 0.3m per metre: BotNav samples heights on a 1m grid and refuses
+# any cell-to-cell rise past STEP_LIP, so a steeper pitch would read as a
+# cliff and cut the ramp out of every bot route.
 #
 # Call GridArenaMap.definition() -> Dictionary, then MapEngine.compile().
 
@@ -38,28 +41,31 @@ static func definition() -> Dictionary:
 			# Pillars holding the deck up inside the garage.
 			{"cover": [4.0, -20.0, 1.2, 1.2], "h": 2.5, "mirror": "xz"},
 			{"cover": [11.5, -20.0, 1.2, 1.2], "h": 2.5, "mirror": "xz"},
-			# Deck-front railing band, with openings above each ramp.
-			{"cover": [0.0, -13.5, 16.6, 0.14], "h": 1.15, "on": 3.2, "base": 3.3, "mirror": "z"},
-			{"cover": [12.85, -13.5, 0.3, 0.14], "h": 1.15, "on": 3.2, "base": 3.3, "mirror": "xz"},
+			# The model's thin deck-front rails are left out on purpose: a rail
+			# thinner than a nav cell never lands on a cell column, so bots
+			# cannot see it and walk into it forever. The deck edge is instead
+			# a clean drop bots refuse on their own (past MAX_DROP they never
+			# link the cells) and players can hop down for a flank.
 
-			# Floor-to-deck ramps flanking the gates (0.32 rises, walkable).
+			# Floor-to-deck ramps flanking the gates.
 			{
 				"stairs": {
-					"axis": "z", "at": 10.5, "start": -6.8, "spacing": -0.76,
-					"width": 4.4, "depth": 0.8,
-					"heights": [0.32, 0.64, 0.96, 1.28, 1.6, 1.92, 2.24, 2.56, 2.88, 3.2],
+					"axis": "z", "at": 10.5, "start": -3.6, "spacing": -1.0,
+					"width": 4.4, "depth": 1.0,
+					"heights": [0.3, 0.6, 0.9, 1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0, 3.2],
 				},
 				"mirror": "xz",
 			},
 
-			# Deck-to-catwalk upramps along the back of each deck.
+			# Deck-to-catwalk upramps along the back of each deck. Longer than
+			# the model's wedge so the pitch stays bot-walkable.
 			{
 				"stairs": {
-					"axis": "x", "at": -18.5, "start": -7.3, "spacing": -0.62,
-					"width": 3.8, "depth": 0.66,
+					"axis": "x", "at": -18.5, "start": -2.1, "spacing": -1.0,
+					"width": 3.8, "depth": 1.0,
 					"heights": [
-						3.52, 3.84, 4.16, 4.48, 4.8, 5.12,
-						5.44, 5.76, 6.08, 6.4, 6.72, 7.0,
+						3.5, 3.8, 4.1, 4.4, 4.7, 5.0, 5.3,
+						5.6, 5.9, 6.2, 6.5, 6.8, 7.0,
 					],
 				},
 				"base": 3.2,
@@ -89,17 +95,17 @@ static func definition() -> Dictionary:
 			# Ramps up the core platform on all four sides.
 			{
 				"stairs": {
-					"axis": "z", "at": 0.0, "start": -11.2, "spacing": 0.74,
-					"width": 4.5, "depth": 0.78,
-					"heights": [0.32, 0.64, 0.96, 1.28, 1.6],
+					"axis": "z", "at": 0.0, "start": -12.6, "spacing": 1.0,
+					"width": 4.5, "depth": 1.0,
+					"heights": [0.3, 0.6, 0.9, 1.2, 1.5],
 				},
 				"mirror": "z",
 			},
 			{
 				"stairs": {
-					"axis": "x", "at": 0.0, "start": -11.2, "spacing": 0.74,
-					"width": 4.5, "depth": 0.78,
-					"heights": [0.32, 0.64, 0.96, 1.28, 1.6],
+					"axis": "x", "at": 0.0, "start": -12.6, "spacing": 1.0,
+					"width": 4.5, "depth": 1.0,
+					"heights": [0.3, 0.6, 0.9, 1.2, 1.5],
 				},
 				"mirror": "x",
 			},
@@ -117,14 +123,22 @@ static func definition() -> Dictionary:
 			{"cover": [0.0, -13.5, 2.6, 2.6], "h": 0.15, "mirror": "z"},
 			{"cover": [16.6, -20.0, 2.6, 2.6], "h": 0.15, "mirror": "xz"},
 		],
-		# Spawns sit in the garage under the deck, behind the crate wall.
+		# Spawns sit on the deck at the model's spawn pods. The deck is the
+		# nav layer for those columns (BotNav keeps one surface per cell,
+		# topmost wins), so spawning up here is what lets bots route out.
 		"spawns": {
-			"blue": [[-4.0, -27.5], [4.0, -27.5], [0.0, -27.8], [-8.0, -27.5], [8.0, -27.5]],
-			"red": [[-4.0, 27.5], [4.0, 27.5], [0.0, 27.8], [-8.0, 27.5], [8.0, 27.5]],
+			"blue": [
+				[0.0, -24.5, 3.45], [-11.0, -24.5, 3.45], [11.0, -24.5, 3.45],
+				[-5.5, -25.5, 3.2], [5.5, -25.5, 3.2],
+			],
+			"red": [
+				[0.0, 24.5, 3.45], [-11.0, 24.5, 3.45], [11.0, 24.5, 3.45],
+				[-5.5, 25.5, 3.2], [5.5, 25.5, 3.2],
+			],
 		},
 		"pads": [
-			{"x": 0.0, "z": -27.5, "team": "blue"},
-			{"x": 0.0, "z": 27.5, "team": "red"},
+			{"x": 0.0, "z": -24.5, "y": 3.2, "team": "blue"},
+			{"x": 0.0, "z": 24.5, "y": 3.2, "team": "red"},
 		],
 		"theme": {
 			"floor": 0x2a3240,

@@ -253,6 +253,8 @@ static func _build_pads(parent: Node3D, pads: Array) -> void:
 		var is_red := str(p.get("team", "blue")) == "red"
 		var pad_color := 0xff2d3f if is_red else 0x1c6cff
 		var pad_mat := _emissive_mat(pad_color, 0.6)
+		# Pads sit on the ground unless the map raises them onto a deck.
+		var y0: float = float(p.get("y", 0.0))
 
 		# Outer ring. Radius covers the widest spawn offset (x=±3) with margin.
 		var outer := MeshInstance3D.new()
@@ -262,7 +264,7 @@ static func _build_pads(parent: Node3D, pads: Array) -> void:
 		cyl.height = 0.03
 		cyl.material = pad_mat
 		outer.mesh = cyl
-		outer.position = Vector3(p["x"], 0.05, p["z"])
+		outer.position = Vector3(p["x"], y0 + 0.05, p["z"])
 		outer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(outer)
 
@@ -274,7 +276,7 @@ static func _build_pads(parent: Node3D, pads: Array) -> void:
 		icyl.height = 0.04
 		icyl.material = _std_mat(0x0b0e16, 0.6, 0.4)
 		inner.mesh = icyl
-		inner.position = Vector3(p["x"], 0.06, p["z"])
+		inner.position = Vector3(p["x"], y0 + 0.06, p["z"])
 		inner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(inner)
 
