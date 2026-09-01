@@ -145,6 +145,9 @@ func _key_name_to_event(key_name: String) -> InputEvent:
 		if MOUSE_BUTTON_NAMES[button_index] == key_name:
 			var mouse_ev := InputEventMouseButton.new()
 			mouse_ev.button_index = button_index
+			# InputMap templates must be pressed=true or wheel/button binds only
+			# match the release and never look "down" to gameplay polls.
+			mouse_ev.pressed = true
 			return mouse_ev
 	var mapping := {
 		"W": KEY_W, "A": KEY_A, "S": KEY_S, "D": KEY_D,
@@ -219,7 +222,11 @@ func fmt(action_name: String) -> String:
 	return " / ".join(parts) if parts.size() > 0 else "—"
 
 func is_action_pressed(action_name: String) -> bool:
-	return Input.is_action_pressed("game_" + action_name)
+	# Mouse wheel fires press+release in the same frame, so a plain
+	# is_action_pressed poll in _physics_process often sees nothing. Treat
+	# just_pressed as down for that frame so alt binds like WheelDown→jump work.
+	var action := "game_" + action_name
+	return Input.is_action_pressed(action) or Input.is_action_just_pressed(action)
 
 func is_action_just_pressed(action_name: String) -> bool:
 	return Input.is_action_just_pressed("game_" + action_name)
