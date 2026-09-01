@@ -129,6 +129,9 @@ func round_start() -> void:
 func round_end(winner_team: int, match_over: bool, match_point: bool) -> void:
 	play_clip("round_end_sting")
 	if match_over:
+		# A draw has no winning side to call, so the sting stands alone.
+		if winner_team == Protocol.TEAM_NONE:
+			return
 		var delay_timer := get_tree().create_timer(1.2)
 		delay_timer.timeout.connect(func() -> void:
 			if winner_team == Protocol.TEAM_BLUE:
@@ -144,9 +147,12 @@ func match_over(winner_team: int) -> void:
 	if winner_team == Protocol.TEAM_BLUE:
 		play_clip("blue_wins")
 		show_banner("BLUE WINS", COLOR_BLUE)
-	else:
+	elif winner_team == Protocol.TEAM_RED:
 		play_clip("red_wins")
 		show_banner("RED WINS", COLOR_RED)
+	else:
+		# Nobody won it; there is no clip for that.
+		show_banner("DRAW", COLOR_WHITE)
 
 
 func player_hurt() -> void:

@@ -117,7 +117,7 @@ func _build_spectators(parent: VBoxContainer) -> void:
 # ── Public API ───────────────────────────────────────────────────────────
 
 func update_data(info: Dictionary, players: Array) -> void:
-	var mode: String = str(info.get("mode", "classic"))
+	var mode: String = str(info.get("mode", "arena"))
 	var kill_target := int(info.get("kill_target", 50))
 	var win_rounds := int(info.get("win_rounds", 10))
 	var map_name: String = str(info.get("map_name", "PARKOUR YARD"))
@@ -128,13 +128,13 @@ func update_data(info: Dictionary, players: Array) -> void:
 	var winner := int(info.get("winner", 0))
 	if match_over:
 		var win_name := "BLUE WINS" if winner == Protocol.TEAM_BLUE else ("RED WINS" if winner == Protocol.TEAM_RED else "MATCH OVER")
-		var mode_label := "DEATHMATCH" if mode == "dm" else "CLASSIC"
+		var mode_label := "DEATHMATCH" if mode == "dm" else "ARENA"
 		_meta_left.text = MenuLook.tracked(mode_label) + "   ·   " + MenuLook.tracked(win_name)
 		_meta_right.text = MenuLook.tracked(map_name.to_upper())
 	elif mode == "dm":
 		_meta_left.text = MenuLook.tracked("DEATHMATCH") + "   ·   " + MenuLook.tracked("FIRST TO %d KILLS" % kill_target)
 	else:
-		_meta_left.text = MenuLook.tracked("CLASSIC") + "   ·   " + MenuLook.tracked("FIRST TO %d ROUNDS" % win_rounds)
+		_meta_left.text = MenuLook.tracked("ARENA") + "   ·   " + MenuLook.tracked("FIRST TO %d ROUNDS" % win_rounds)
 	if not match_over:
 		_meta_right.text = MenuLook.tracked(map_name.to_upper()) + "   ·   " + MenuLook.tracked("HOLD TAB")
 
@@ -154,7 +154,7 @@ func update_data(info: Dictionary, players: Array) -> void:
 	red.sort_custom(_by_score)
 	spec.sort_custom(_by_score)
 
-	var unit := "ROUNDS" if mode == "classic" else "KILLS"
+	var unit := "ROUNDS" if mode == "arena" else "KILLS"
 	_blue_card.fill(int(info.get("score_blue", 0)), unit, blue, my_id)
 	_red_card.fill(int(info.get("score_red", 0)), unit, red, my_id)
 

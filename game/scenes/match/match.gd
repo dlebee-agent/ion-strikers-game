@@ -19,7 +19,7 @@ var _world: CollisionWorld = null
 # Reused by every tracer, so a firefight allocates nothing.
 var _shot_trace := TraceResult.new()
 var _map_id: String = "parkour"
-var _mode: String = "classic"
+var _mode: String = "arena"
 var _my_team: int = 0
 var _in_stands := true
 var _alive := false
@@ -49,9 +49,12 @@ var _shake := CameraShake.new()
 var _last_death: Dictionary = {}  # target_id -> { by, head, cause }
 var _local_ragdoll: Ragdoll
 
-## Cosmetic clock for the score bar. The server has no round time limit, so this
-## counts up from the last round start (match start in deathmatch).
-var _clock_start: float = 0.0
+## Score bar clock, as the server last reported it: seconds, and which of
+## Protocol's CLOCK_ modes to read them as. The server owns it so every
+## client reads the same thing and a late joiner sees the real time left in
+## the round rather than their own time since loading.
+var _clock_s: int = 0
+var _clock_mode: int = Protocol.CLOCK_UP
 var _win_rounds: int = 10
 var _max_spectators: int = 0
 var _last_kill_target: int = 50
@@ -70,10 +73,9 @@ func _ready() -> void:
 	AudioMix.fade_out_keep_place(400.0)
 
 	_map_id = str(init_data.get("map", "parkour"))
-	_mode = str(init_data.get("mode", "classic"))
+	_mode = str(init_data.get("mode", "arena"))
 	_win_rounds = int(init_data.get("win_rounds", 10))
 	_max_spectators = int(init_data.get("max_spectators", 0))
-	_clock_start = Time.get_ticks_msec() / 1000.0
 	client = game_client
 	var my_init_id := int(init_data.get("id", 0))
 	if my_init_id != 0:
@@ -132,7 +134,7 @@ func _build_map() -> void:
 
 
 func _build_builtin_map() -> void:
-	var compiled := MapEngine.compile(ParkourMap.definition())
+	var compiled := MapEngine.compile(MapCatalog.builtin_definition(_map_id))
 	MapBuilder.build_visual(self, compiled)
 	_world = MapBuilder.build_world(compiled)
 	_arena_size = float(compiled.get("arena", 28.0))
@@ -178,7 +180,7 @@ func _build_hud() -> void:
 	_hud.chat_submitted.connect(_on_chat_submit)
 	_hud.set_stands_mode(true, Protocol.TEAM_NONE)
 
-	var init_mode := str(init_data.get("mode", "classic"))
+	var init_mode := str(init_data.get("mode", "arena"))
 	var score_blue := int(init_data.get("score_blue", 0))
 	var score_red := int(init_data.get("score_red", 0))
 	var round_num := int(init_data.get("round_num", 1))
@@ -414,6 +416,8 @@ func _physics_process(dt: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if not is_inside_tree():
+		return
 	if ConfirmPrompt.is_open() or _team_panel.is_open() or _hud.is_chat_open() \
 			or _hud.is_settings_open() or _match_over or GameConsole.is_open():
 		return
@@ -426,6 +430,11 @@ func _input(event: InputEvent) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# change_scene from a leave/exit can leave this node receiving input while
+	# already out of the tree; get_viewport() is then null.
+	if not is_inside_tree():
+		return
+
 	if ConfirmPrompt.is_open():
 		return
 
@@ -437,30 +446,31 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _hud.is_settings_open():
 		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
 			_toggle_settings()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _hud.is_chat_open():
 		if event.is_action_pressed("ui_cancel"):
 			_hud.close_chat()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _team_panel.is_open():
 		# Keys (1/2/3, M, ESC) are owned by TeamPanel._input.
-		get_viewport().set_input_as_handled()
+		_mark_input_handled()
 		return
 
 	if _hud.is_controls_visible():
 		if event.is_action_pressed("ui_cancel") or InputBinds.is_action_just_pressed("controls"):
 			_close_controls_card()
-			get_viewport().set_input_as_handled()
+			_mark_input_handled()
 		return
 
 	if _match_over:
 		if event.is_action_pressed("ui_cancel"):
+			# Mark handled before leaving — change_scene frees this node.
+			_mark_input_handled()
 			_exit_to_lobby()
-			get_viewport().set_input_as_handled()
 			return
 		if InputBinds.is_action_just_pressed("chat_all"):
 			_hud.open_chat(false)
@@ -572,9 +582,11 @@ func _on_snap(snap: Dictionary) -> void:
 	var round_num := int(snap.get("round_num", 1))
 	var round_state := int(snap.get("round_state", 0))
 	var mode_int := int(snap.get("mode", 0))
-	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "classic"
+	var snap_mode := "dm" if mode_int == Protocol.MODE_DM else "arena"
 	var snap_kill_target := int(snap.get("kill_target", 50))
 	_win_rounds = int(snap.get("win_rounds", _win_rounds))
+	_clock_s = int(snap.get("clock_s", _clock_s))
+	_clock_mode = int(snap.get("clock_mode", _clock_mode))
 	_mode = snap_mode
 	_last_kill_target = snap_kill_target
 	if _match_over:
@@ -759,7 +771,6 @@ func _on_tracer(msg: Dictionary) -> void:
 
 
 func _on_round_start(msg: Dictionary) -> void:
-	_clock_start = Time.get_ticks_msec() / 1000.0
 	_hud.hide_round_end()
 	_hud.show_banner("ROUND %d" % int(msg.get("round_num", 1)), MatchHud.WHITE)
 	if Announcer:
@@ -776,7 +787,8 @@ func _on_round_end(msg: Dictionary) -> void:
 	_last_score_blue = score_blue
 	_last_score_red = score_red
 	_last_round_num = round_num
-	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over)
+	var reason := int(msg.get("reason", Protocol.END_ELIMINATION))
+	_hud.show_round_end(winner, score_blue, score_red, round_num, match_over, reason)
 	if match_over:
 		_enter_match_over(winner)
 	if Announcer:
@@ -921,8 +933,7 @@ func _on_cheats_denied() -> void:
 
 
 func _clock_text() -> String:
-	var elapsed := int(maxf(0.0, Time.get_ticks_msec() / 1000.0 - _clock_start))
-	return "%d:%02d" % [elapsed / 60, elapsed % 60]
+	return "%d:%02d" % [_clock_s / 60, _clock_s % 60]
 
 
 func _sync_special_hud() -> void:
@@ -1013,6 +1024,8 @@ func _map_display_name() -> String:
 	match _map_id:
 		"parkour":
 			return "Parkour Yard"
+		"skydeck":
+			return "Skydeck"
 		_:
 			return _map_id.capitalize()
 
@@ -1030,6 +1043,12 @@ func _request_leave() -> void:
 
 func _exit_to_lobby() -> void:
 	_on_leave()
+
+
+func _mark_input_handled() -> void:
+	var vp := get_viewport()
+	if vp:
+		vp.set_input_as_handled()
 
 
 func _enter_match_over(winner: int) -> void:

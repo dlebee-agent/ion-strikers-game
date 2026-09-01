@@ -114,9 +114,16 @@ func _handle_create(peer: StreamPeerTCP, msg: Dictionary) -> void:
 		_respond(peer, {"error": "this server does not accept lobby creation"})
 		return
 
+	# Same guard as the ENet create path: refuse rather than silently swap in
+	# a map the requester did not ask for.
+	var map_id := str(msg.get("map", "parkour"))
+	if not MapCatalog.has_map(map_id):
+		_respond(peer, {"error": "server does not have map '%s'" % map_id})
+		return
+
 	var cfg := {
-		"map_id": str(msg.get("map", "parkour")),
-		"mode": str(msg.get("mode", "classic")),
+		"map_id": map_id,
+		"mode": str(msg.get("mode", "arena")),
 		"rounds": int(msg.get("rounds", 10)),
 		"kills": int(msg.get("kills", 50)),
 		"max_players": int(msg.get("max_players", 12)),

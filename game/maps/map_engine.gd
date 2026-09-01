@@ -29,6 +29,9 @@ static func compile(def: Dictionary) -> Dictionary:
 		"name": def.get("name", ""),
 		"desc": def.get("desc", ""),
 		"arena": arena,
+		# Optional [half_x, half_z] floor extents for maps that are not
+		# square; everything defaults to the square the arena value implies.
+		"floor": def.get("floor", []),
 		"spawns": def.get("spawns", {}),
 		"pads": def.get("pads", []),
 		"theme": def.get("theme", {}),
@@ -98,8 +101,12 @@ static func _compile_shape(sh: Dictionary, arena: float) -> Dictionary:
 		var t: float = sh.get("t", DEFAULT_T)
 		walls.append(_box(0, -arena, arena * 2, t, h))
 		walls.append(_box(0, arena, arena * 2, t, h))
-		walls.append(_box(-arena, 0, t, arena * 2, h))
-		walls.append(_box(arena, 0, t, arena * 2, h))
+		# The side walls stop at the inner face of the end walls rather than
+		# running the full span. Overlapping them left four corner squares
+		# covered twice at one height, which flickers; the end walls already
+		# reach the corners, so nothing opens up.
+		walls.append(_box(-arena, 0, t, arena * 2 - t, h))
+		walls.append(_box(arena, 0, t, arena * 2 - t, h))
 	elif sh.has("wall"):
 		var w: Array = sh["wall"]
 		walls.append(_box(w[0], w[1], w[2], w[3], _abs_h(sh, sh.get("h", 3.0))))

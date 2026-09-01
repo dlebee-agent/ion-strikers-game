@@ -533,7 +533,7 @@ func update_score(blue: int, red: int, round_num: int, mode: String, kill_target
 		round_state: int, win_rounds: int = 10,
 		blue_alive: int = 0, red_alive: int = 0, clock: String = "") -> void:
 	_score_bar.set_scores(blue, red)
-	_score_bar.set_alive(blue_alive, red_alive, mode == "classic")
+	_score_bar.set_alive(blue_alive, red_alive, mode == "arena")
 
 	if mode == "dm":
 		_score_bar.set_center("DEATHMATCH", clock, "FIRST TO %d" % kill_target)
@@ -653,9 +653,10 @@ func hide_banner() -> void:
 	_banner_sub.modulate.a = 1.0
 
 
-func show_round_end(winner: int, score_blue: int, score_red: int, round_num: int, match_over: bool) -> void:
+func show_round_end(winner: int, score_blue: int, score_red: int, round_num: int, match_over: bool,
+		reason: int = Protocol.END_ELIMINATION) -> void:
 	hide_banner()
-	_round_end.present(winner, score_blue, score_red, round_num, match_over)
+	_round_end.present(winner, score_blue, score_red, round_num, match_over, reason)
 	_round_end.move_to_front()
 	if _chat_wrap:
 		_chat_wrap.move_to_front()

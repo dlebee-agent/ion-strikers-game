@@ -30,6 +30,20 @@ var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
 var _shot_trace := TraceResult.new()
 var arena_size: float = 28.0
+## Half extents of the map's floor, which is square on every map but grid
+## arena. Anything beyond it horizontally is off the map.
+var _bounds_half := Vector2(28.0, 28.0)
+
+## Below this a pawn has left the floor behind and is only going to keep
+## falling: the floor slab tops out at y=0 and its underside sits at y=-2,
+## so nothing that is still on the map is ever down here.
+const VOID_Y := -6.0
+## How far past the floor edge a pawn may be before it counts as off the
+## map. The perimeter walls stand on that edge, so the only way to be out
+## here is to have left over the top of one.
+const VOID_MARGIN := 1.5
+## Enough to kill through any amount of health.
+const VOID_DAMAGE := 1000
 
 var _tick: int = 0
 var _now: float = 0.0
@@ -76,7 +90,11 @@ func _init(cfg: Dictionary = {}) -> void:
 	game_id = cfg.get("game_id", _gen_id())
 	display_name = cfg.get("display_name", "")
 	map_id = cfg.get("map_id", "parkour")
-	mode = cfg.get("mode", "classic")
+	# Anything that is not deathmatch is arena. The Game API hands the create
+	# paths whatever mode string it was given, so a stray value — an older
+	# client's "classic", a typo — would otherwise build a match that half
+	# behaves like one mode and half like the other.
+	mode = "dm" if str(cfg.get("mode", "arena")) == "dm" else "arena"
 	win_rounds = cfg.get("rounds", 10)
 	kill_target = cfg.get("kills", 50)
 	max_players = cfg.get("max_players", 12)
@@ -106,11 +124,12 @@ func setup_map() -> void:
 
 
 func _setup_builtin_map() -> void:
-	var map_def: Dictionary = ParkourMap.definition()
+	var map_def: Dictionary = MapCatalog.builtin_definition(map_id)
 	var compiled := MapEngine.compile(map_def)
 	world = MapBuilder.build_world(compiled)
 	spawns = MapCatalog.normalize_spawns(compiled.get("spawns", {}))
 	arena_size = compiled.get("arena", 28.0)
+	_bounds_half = MapBuilder.floor_half(compiled)
 
 
 func _setup_community_map() -> void:
@@ -125,6 +144,7 @@ func _setup_community_map() -> void:
 	world = level.world
 	spawns = level.spawns
 	arena_size = level.arena
+	_bounds_half = Vector2(level.arena, level.arena)
 	print("[server] %s: %d brushes, %d spawns" % [
 		map_id, world.brush_count(), level.spawn_count()])
 
@@ -469,11 +489,27 @@ func build_snap() -> PackedByteArray:
 		}
 		players.append(entry)
 
-	var mode_int := Protocol.MODE_DM if mode == "dm" else Protocol.MODE_CLASSIC
+	var mode_int := Protocol.MODE_DM if mode == "dm" else Protocol.MODE_ARENA
+	var clock := _clock_reading()
 	return Protocol.encode_snap(
 		match_state.score_blue, match_state.score_red, match_state.round_num,
 		match_state.round_state, mode_int, match_state.kill_target,
-		match_state.win_rounds, players)
+		match_state.win_rounds, players, clock[0], clock[1])
+
+
+# What the score bar should read, as [seconds, mode]. Decided here so every
+# client agrees on it and someone joining late picks up the real time left,
+# rather than each running its own timer from whenever it happened to load.
+func _clock_reading() -> Array:
+	if mode == "dm":
+		if MatchState.DM_TIME_S <= 0.0:
+			return [int(maxf(0.0, _now)), Protocol.CLOCK_UP]
+		if match_state.match_ends_at <= 0.0:
+			return [int(MatchState.DM_TIME_S), Protocol.CLOCK_DOWN]
+		return [int(ceilf(maxf(0.0, match_state.match_ends_at - _now))), Protocol.CLOCK_DOWN]
+	if match_state.round_ends_at <= 0.0:
+		return [int(MatchState.ROUND_TIME_S), Protocol.CLOCK_DOWN]
+	return [int(ceilf(maxf(0.0, match_state.round_ends_at - _now))), Protocol.CLOCK_DOWN]
 
 
 # ── Internals ────────────────────────────────────────────────────────────
@@ -487,45 +523,141 @@ func _tick_match(_dt: float) -> void:
 			_start_round()
 		return
 
-	if mode == "classic":
-		_check_classic_round()
+	_check_out_of_bounds()
+
+	if mode == "dm":
+		_check_dm_time()
+	else:
+		_check_arena_round()
 
 
-func _check_classic_round() -> void:
-	var blue_alive := 0
-	var red_alive := 0
-	var blue_total := 0
-	var red_total := 0
+# Falling off the map kills rather than dropping forever. Grid arena's
+# catwalks run above the tops of its perimeter walls, so a player can step
+# over one into open space with nothing below to ever stop them.
+#
+# The height test is the one that catches everything: whatever route took
+# them off the map, they end up under it. The horizontal test is for a pawn
+# flung past the wall by a blast while still level with the floor.
+func _check_out_of_bounds() -> void:
+	for pid: int in pawns:
+		var pawn: ServerPawn = pawns[pid]
+		if not pawn.alive:
+			continue
+		if pawn.position.y > VOID_Y \
+				and absf(pawn.position.x) <= _bounds_half.x + VOID_MARGIN \
+				and absf(pawn.position.z) <= _bounds_half.y + VOID_MARGIN:
+			continue
+		# Routed through the damage path so the death counts, the kill feed
+		# names the void, and a deathmatch respawn is scheduled, exactly as
+		# a lethal hit would. by_id 0 leaves it uncredited.
+		_apply_damage(pid, 0, VOID_DAMAGE, false, Protocol.CAUSE_VOID)
 
-	for pid: int in participants:
-		var p: Participant = participants[pid]
-		if p.team == Protocol.TEAM_BLUE:
-			blue_total += 1
-			if pawns.has(pid) and pawns[pid].alive:
-				blue_alive += 1
-		elif p.team == Protocol.TEAM_RED:
-			red_total += 1
-			if pawns.has(pid) and pawns[pid].alive:
-				red_alive += 1
 
-	if blue_total == 0 or red_total == 0:
+# Deathmatch is played to the kill target; the clock is only here so a
+# lobby that never gets there still finishes. It starts when the first
+# player arrives rather than when the lobby is created, or an idle lobby
+# would burn the whole match down waiting for someone to join.
+func _check_dm_time() -> void:
+	if match_state.match_ends_at <= 0.0:
+		if MatchState.DM_TIME_S > 0.0 and not participants.is_empty():
+			match_state.match_ends_at = _now + MatchState.DM_TIME_S
+		return
+	if _now < match_state.match_ends_at:
 		return
 
-	var winner := 0
-	if blue_alive == 0 and red_alive > 0:
-		winner = Protocol.TEAM_RED
-	elif red_alive == 0 and blue_alive > 0:
+	var winner := Protocol.TEAM_NONE
+	if match_state.score_blue > match_state.score_red:
 		winner = Protocol.TEAM_BLUE
+	elif match_state.score_red > match_state.score_blue:
+		winner = Protocol.TEAM_RED
 
-	if winner != 0:
-		_award_round(winner)
+	match_state.round_state = Protocol.RS_OVER
+	match_state.winner = winner
+	event_broadcast.emit(Protocol.CH_EVENTS,
+		Protocol.encode_round_end(winner, match_state.score_blue, match_state.score_red,
+			true, false, match_state.round_num, Protocol.END_TIME), -1)
+	_broadcast_match_over(winner)
 
 
-func _award_round(winner: int) -> void:
+# An arena round ends three ways: one side is wiped out, one side empties
+# because everyone on it left or went to spectate, or the clock runs out.
+# The middle one matters as much as the first: a round waiting on a team
+# with nobody left to kill would sit there forever.
+func _check_arena_round() -> void:
+	# The clock runs from the moment the round does, whoever is here. A
+	# number that only starts once the lobby fills reads as a broken one.
+	if match_state.round_ends_at <= 0.0:
+		match_state.round_ends_at = _now + MatchState.ROUND_TIME_S
+
+	var blue := _team_standing(Protocol.TEAM_BLUE)
+	var red := _team_standing(Protocol.TEAM_RED)
+	match_state.round_had_blue = match_state.round_had_blue or blue["total"] > 0
+	match_state.round_had_red = match_state.round_had_red or red["total"] > 0
+
+	# A side that emptied out hands the round over. A side nobody has
+	# joined yet does not: a lobby with one player would otherwise award
+	# them the whole match a round at a time while they waited for someone.
+	var blue_left: bool = blue["total"] == 0 and match_state.round_had_blue
+	var red_left: bool = red["total"] == 0 and match_state.round_had_red
+	if blue_left != red_left:
+		_award_round(
+			Protocol.TEAM_RED if blue_left else Protocol.TEAM_BLUE,
+			Protocol.END_FORFEIT)
+		return
+
+	var contested: bool = blue["total"] > 0 and red["total"] > 0
+	if contested and (blue["alive"] == 0 or red["alive"] == 0):
+		var standing := Protocol.TEAM_NONE
+		if blue["alive"] > 0:
+			standing = Protocol.TEAM_BLUE
+		elif red["alive"] > 0:
+			standing = Protocol.TEAM_RED
+		# Both sides going down together is a draw, not a win for whoever
+		# the comparison happens to fall through to.
+		_award_round(standing, Protocol.END_ELIMINATION)
+		return
+
+	if _now >= match_state.round_ends_at:
+		# Uncontested, the clock simply resets the round: there was nobody
+		# to beat, so nobody won it.
+		_award_round(_time_winner(blue, red) if contested else Protocol.TEAM_NONE,
+			Protocol.END_TIME)
+
+
+# Who is on a team and how they are doing, as one pass over the roster.
+func _team_standing(team: int) -> Dictionary:
+	var total := 0
+	var alive := 0
+	var hp := 0
+	for pid: int in participants:
+		if participants[pid].team != team:
+			continue
+		total += 1
+		if pawns.has(pid) and (pawns[pid] as ServerPawn).alive:
+			alive += 1
+			hp += maxi((pawns[pid] as ServerPawn).hp, 0)
+	return {"total": total, "alive": alive, "hp": hp}
+
+
+# Time ran out with both sides still standing, so it goes to whoever is in
+# better shape: more players up, and failing that more health between them.
+# Dead level is a draw.
+func _time_winner(blue: Dictionary, red: Dictionary) -> int:
+	if blue["alive"] != red["alive"]:
+		return Protocol.TEAM_BLUE if blue["alive"] > red["alive"] else Protocol.TEAM_RED
+	if blue["hp"] != red["hp"]:
+		return Protocol.TEAM_BLUE if blue["hp"] > red["hp"] else Protocol.TEAM_RED
+	return Protocol.TEAM_NONE
+
+
+func _award_round(winner: int, reason: int) -> void:
+	# A draw closes the round out without scoring for either side.
 	if winner == Protocol.TEAM_BLUE:
 		match_state.score_blue += 1
-	else:
+	elif winner == Protocol.TEAM_RED:
 		match_state.score_red += 1
+
+	match_state.round_ends_at = 0.0
 
 	var match_over := false
 	var match_point := false
@@ -543,7 +675,7 @@ func _award_round(winner: int) -> void:
 
 	event_broadcast.emit(Protocol.CH_EVENTS,
 		Protocol.encode_round_end(winner, match_state.score_blue, match_state.score_red,
-			match_over, match_point, match_state.round_num), -1)
+			match_over, match_point, match_state.round_num, reason), -1)
 
 	if match_over:
 		_broadcast_match_over(winner)
@@ -552,6 +684,10 @@ func _award_round(winner: int) -> void:
 func _start_round() -> void:
 	match_state.round_num += 1
 	match_state.round_state = Protocol.RS_ACTIVE
+	# Left unarmed; the round's first tick starts the clock.
+	match_state.round_ends_at = 0.0
+	match_state.round_had_blue = false
+	match_state.round_had_red = false
 	match_state.first_blood_done = false
 	match_state.match_point_announced = false
 	match_state.pending_meteor = {}
@@ -560,7 +696,7 @@ func _start_round() -> void:
 	# Rebalance before redeploying so bots added for this round spawn with everyone else.
 	_manage_bots()
 
-	# Classic redeploys the whole side at base each round, survivors included.
+	# Arena redeploys the whole side at base each round, survivors included.
 	for pid: int in participants:
 		var p: Participant = participants[pid]
 		if p.team != Protocol.TEAM_BLUE and p.team != Protocol.TEAM_RED:
@@ -848,7 +984,7 @@ func _on_kill(killer_id: int, _victim_id: int, head: bool, cause: int) -> void:
 		match_state.first_blood_done = true
 
 	var mp := false
-	if mode == "classic":
+	if mode == "arena":
 		var needed := match_state.win_rounds
 		if (match_state.score_blue == needed - 1 or match_state.score_red == needed - 1) and not match_state.match_point_announced:
 			mp = true

@@ -3,6 +3,14 @@ extends RefCounted
 
 const ROUND_END_DELAY := 3.5
 const DM_RESPAWN_MS := 5000.0
+
+## How long an arena round runs before it is decided on who is left
+## standing. Deathmatch has no round clock: everyone respawns there, so a
+## round that could only ever end on a timer is just the match itself.
+const ROUND_TIME_S := 120.0
+## Ceiling on a whole deathmatch, so a lobby that never reaches the kill
+## target still finishes. Zero runs it uncapped.
+const DM_TIME_S := 600.0
 const PREP_TIME_MS := 2200.0
 const SPECIAL_STREAK := 5
 const MULTI_WINDOW := 4.0
@@ -16,7 +24,7 @@ const METEOR_RADIUS := 5.0
 const METEOR_VERT := 3.5
 
 var match_id: String
-var mode: String = "classic"
+var mode: String = "arena"
 var win_rounds: int = 10
 var kill_target: int = 50
 var score_blue: int = 0
@@ -28,6 +36,17 @@ var first_blood_done: bool = false
 var match_point_announced: bool = false
 
 var round_end_at: float = 0.0
+
+## Instance clock the running round expires on, and the same for a whole
+## deathmatch. Zero arms on the next tick.
+var round_ends_at: float = 0.0
+var match_ends_at: float = 0.0
+## Whether each side has had anyone on it at any point this round. A side
+## that emptied out forfeits; a side nobody ever joined is just a lobby
+## short of players, and handing its rounds to whoever did join would have
+## a solo host winning the match by themselves.
+var round_had_blue: bool = false
+var round_had_red: bool = false
 
 var pending_meteor: Dictionary = {}
 var next_meteor_at: float = 0.0

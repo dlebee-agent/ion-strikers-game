@@ -13,7 +13,7 @@ func _initialize() -> void:
 	var host := Node3D.new()
 	root.add_child(host)
 
-	for map_id in ["parkour", "community/arena1"]:
+	for map_id in ["parkour", "skydeck", "community/arena1"]:
 		print("== ", map_id)
 		var t0 := Time.get_ticks_msec()
 		if MapCatalog.is_community(map_id):
@@ -28,7 +28,7 @@ func _initialize() -> void:
 			MapBuilder.build_ambience(host, MapCatalog.ambience_for(level))
 			print("   ambience      %6d ms" % (Time.get_ticks_msec() - t2))
 		else:
-			var compiled := MapEngine.compile(ParkourMap.definition())
+			var compiled := MapEngine.compile(MapCatalog.builtin_definition(map_id))
 			var t1 := Time.get_ticks_msec()
 			MapBuilder.build_visual(host, compiled)
 			print("   build_visual  %6d ms" % (Time.get_ticks_msec() - t1))

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://haq4rwgvsv4a"
-path="res://.godot/imported/sky_parkour_1.png-b0d931c306bbf45356108e6fe4b8121f.ctex"
+uid="uid://3dtlp6ca7u0v"
+path="res://.godot/imported/sky_2.png-e748d33cbc193195baa9e6f3d615a02a.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://maps/sky_parkour_1.png"
-dest_files=["res://.godot/imported/sky_parkour_1.png-b0d931c306bbf45356108e6fe4b8121f.ctex"]
+source_file="res://maps/parkour/sky_2.png"
+dest_files=["res://.godot/imported/sky_2.png-e748d33cbc193195baa9e6f3d615a02a.ctex"]
 
 [params]
 

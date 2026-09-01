@@ -236,7 +236,7 @@ func TestListOmitsHostRowsWithNoMap(t *testing.T) {
 	register(t, ts, managed, "srv-managed", true)
 	heartbeat(t, ts, "srv-managed", 0, 1, []store.CachedGame{
 		{GameID: "host-placeholder", ServerID: "srv-managed", MaxPlayers: 8, Capacity: 8, Round: 1},
-		{GameID: "real-lobby", ServerID: "srv-managed", DisplayName: "Arena", MapID: "parkour", Mode: "classic"},
+		{GameID: "real-lobby", ServerID: "srv-managed", DisplayName: "Arena", MapID: "parkour", Mode: "arena"},
 	}).Body.Close()
 
 	resp, err := http.Get(ts.URL + "/v1/games")
@@ -315,7 +315,7 @@ func TestCreateRoutesToCapableServerAndIsSigned(t *testing.T) {
 	heartbeat(t, ts, "srv-managed", 0, 0, nil).Body.Close()
 
 	resp, err := http.Post(ts.URL+"/v1/games", "application/json",
-		bytes.NewReader([]byte(`{"mode":"classic","map":"parkour"}`)))
+		bytes.NewReader([]byte(`{"mode":"arena","map":"parkour"}`)))
 	if err != nil {
 		t.Fatal(err)
 	}

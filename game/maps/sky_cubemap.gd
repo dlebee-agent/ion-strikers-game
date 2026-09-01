@@ -60,7 +60,7 @@ static func bake_pngs(compiled: Dictionary, stem: String) -> Array[Image]:
 static func _load_baked(key: String) -> Cubemap:
 	var faces: Array[Image] = []
 	for i in 6:
-		var path := "res://maps/sky_%s_%d.png" % [key, i]
+		var path := "res://maps/%s/sky_%d.png" % [key, i]
 		if not ResourceLoader.exists(path):
 			return null
 		var res: Resource = ResourceLoader.load(path)

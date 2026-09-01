@@ -6,9 +6,20 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 6
+const PROTOCOL_VERSION := 7
 
-const MODE_CLASSIC := 0
+# Why a round ended, so the overlay can say so rather than always claiming
+# the losing side was wiped out.
+const END_ELIMINATION := 0
+const END_TIME := 1
+const END_FORFEIT := 2
+
+# How to read the clock a snap carries. It always runs, so there is no
+# third state for a stopped one.
+const CLOCK_UP := 0
+const CLOCK_DOWN := 1
+
+const MODE_ARENA := 0
 const MODE_DM := 1
 
 const PFLG_ALIVE := 1
@@ -59,6 +70,7 @@ enum Msg {
 	CHEATS,
 	SET_CHEATS_DENIED,
 	JOIN_AUTH,
+	HELLO,
 }
 
 enum Team { TEAM_NONE = 0, TEAM_BLUE = 1, TEAM_RED = 2 }
@@ -190,6 +202,13 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["bots_move"] = b.get_u8() != 0
 			d["bot_skill"] = b.get_u8()
 			d["display_name"] = _read_string(b)
+		Msg.HELLO:
+			d["v"] = b.get_u8()
+			var map_count := b.get_u16()
+			var maps: Array[String] = []
+			for i in map_count:
+				maps.append(_read_string(b))
+			d["maps"] = maps
 		Msg.JOIN_DIRECT:
 			d["v"] = b.get_u8()
 			d["name"] = _read_string(b)
@@ -231,6 +250,8 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["mode"] = b.get_u8()
 			d["kill_target"] = b.get_u16()
 			d["win_rounds"] = b.get_u16()
+			d["clock_s"] = b.get_u16()
+			d["clock_mode"] = b.get_u8()
 			var count := b.get_u8()
 			var players: Array[Dictionary] = []
 			for _i in count:
@@ -312,6 +333,7 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["score_blue"] = b.get_u16()
 			d["score_red"] = b.get_u16()
 			d["round_num"] = b.get_u16()
+			d["reason"] = b.get_u8()
 		Msg.MATCH_OVER:
 			d["winner"] = b.get_u8()
 			d["score_blue"] = b.get_u16()
@@ -428,6 +450,22 @@ static func encode_create_game(
 	return b.data_array
 
 
+# Sent by the server to every peer the moment it connects, before the peer
+# has said anything. Carries the server's protocol version and the maps it
+# can actually simulate, so a client can refuse a create or join it knows
+# will desync instead of discovering it mid-match. Clients older than the
+# HELLO message fall through their decode switch and ignore it.
+static func encode_hello(maps: Array) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.HELLO)
+	b.put_u8(0)
+	b.put_u8(PROTOCOL_VERSION)
+	b.put_u16(maps.size())
+	for m in maps:
+		_write_string(b, str(m))
+	return b.data_array
+
+
 static func encode_join_direct(callsign: String) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.JOIN_DIRECT)
@@ -500,10 +538,14 @@ static func encode_state(
 	return b.data_array
 
 
+# clock_s is whatever the score bar should read, in seconds, already decided
+# by the server: time left where there is a limit, time elapsed where there
+# is not. clock_mode says which, so the client renders rather than rules on
+# it. Both ride the snap because the clock has to survive a dropped packet.
 static func encode_snap(
 		score_blue: int, score_red: int, round_num: int,
 		round_state: int, mode: int, kill_target: int, win_rounds: int,
-		players: Array) -> PackedByteArray:
+		players: Array, clock_s: int = 0, clock_mode: int = CLOCK_UP) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.SNAP)
 	b.put_u8(0)
@@ -514,6 +556,8 @@ static func encode_snap(
 	b.put_u8(mode)
 	b.put_u16(kill_target)
 	b.put_u16(win_rounds)
+	b.put_u16(clampi(clock_s, 0, 65535))
+	b.put_u8(clock_mode)
 	b.put_u8(players.size())
 	for p: Dictionary in players:
 		b.put_32(p["id"])
@@ -665,9 +709,13 @@ static func encode_round_start(
 	return b.data_array
 
 
+# winner may be TEAM_NONE, which is a draw: nobody scores and the round
+# still advances. A clock can run out with both sides even, or with both
+# wiped out in the same instant.
 static func encode_round_end(
 		winner: int, score_blue: int, score_red: int,
-		match_over: bool, match_point: bool, round_num: int) -> PackedByteArray:
+		match_over: bool, match_point: bool, round_num: int,
+		reason: int = END_ELIMINATION) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.ROUND_END)
 	var flags := 0
@@ -680,6 +728,7 @@ static func encode_round_end(
 	b.put_u16(score_blue)
 	b.put_u16(score_red)
 	b.put_u16(round_num)
+	b.put_u8(reason)
 	return b.data_array
 
 
