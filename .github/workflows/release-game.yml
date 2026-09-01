@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release-game-${{ github.event.inputs.tag || github.ref }}
@@ -188,14 +189,27 @@ jobs:
 
   # -------------------------------------------------------------------------
   # Windows client installer. Godot exports an .exe + .pck; Inno Setup wraps
-  # that into a normal setup wizard (Start Menu, uninstall entry, optional
-  # desktop shortcut). NSIS is the other tool Godot mentions — we deliberately
-  # keep only Inno Setup.
+  # that into a normal setup wizard. Azure Artifact Signing (Trusted Signing)
+  # Authenticode-signs the game exe, the setup.exe, and Inno's embedded
+  # uninstaller via OIDC — no client secret. The signed exe(+pck) is also
+  # published as a portable zip alongside the setup.
+  #
+  # Requires GitHub Environment "release" (Settings → Environments) so tag
+  # pushes can federate to Entra. Repo variables supply account/profile ids.
   # -------------------------------------------------------------------------
   package-windows:
     name: Windows Inno Setup
     runs-on: windows-latest
     needs: [validate, build-desktop]
+    environment: release
+
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
 
     steps:
       - name: Checkout
@@ -207,10 +221,87 @@ jobs:
           name: windows-client
           path: stage
 
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build setup.exe
+      - name: Install Inno Setup + Artifact Signing dlib
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --no-progress -y
+
+          $pkg = 'Microsoft.ArtifactSigning.Client'
+          $ver = '1.0.128'
+          $out = Join-Path $env:RUNNER_TEMP 'acs-client'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $nupkg = Join-Path $out "$pkg.$ver.nupkg"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/$($pkg.ToLowerInvariant())/$ver/$($pkg.ToLowerInvariant()).$ver.nupkg" `
+            -OutFile $nupkg
+          # Expand-Archive wants a .zip suffix.
+          $zip = Join-Path $out 'client.zip'
+          Copy-Item -Force $nupkg $zip
+          Expand-Archive -Path $zip -DestinationPath (Join-Path $out 'pkg') -Force
+
+          $dlib = Get-ChildItem -Path (Join-Path $out 'pkg') -Filter 'Azure.CodeSigning.Dlib.dll' -Recurse |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dlib) { throw 'Azure.CodeSigning.Dlib.dll (x64) not found in nupkg' }
+
+          $meta = Join-Path $out 'metadata.json'
+          @{
+            Endpoint = $env:AZURE_TRUSTED_SIGNING_ENDPOINT.TrimEnd('/')
+            CodeSigningAccountName = $env:AZURE_TRUSTED_SIGNING_ACCOUNT
+            CertificateProfileName = $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE
+          } | ConvertTo-Json | Set-Content -Path $meta -Encoding utf8
+
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signtool = Get-ChildItem -Path $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe not found on runner' }
+
+          "ACS_DLIB=$dlib"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ACS_METADATA=$meta"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SIGNTOOL=$signtool"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "dlib=$dlib"
+          Write-Host "metadata=$meta"
+          Write-Host "signtool=$signtool"
+
+      - name: Sign game executables
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sign = Join-Path $PWD 'tools\release\windows\sign-file.ps1'
+          $exes = @(Get-ChildItem -Path stage -Filter *.exe -Recurse -File)
+          if ($exes.Count -eq 0) { throw 'No .exe files found in stage to sign' }
+          foreach ($exe in $exes) {
+            & $sign $exe.FullName
+          }
+
+      - name: Package signed portable zip
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $name = "ion-strikers-$env:VERSION-windows-x86_64"
+          $staging = Join-Path $env:RUNNER_TEMP $name
+          if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item -Path 'stage\*' -Destination $staging -Recurse -Force
+          $zip = Join-Path (Resolve-Path dist).Path "$name.zip"
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          # Folder root in the zip matches the pre-Inno portable layout.
+          Compress-Archive -Path $staging -DestinationPath $zip
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Build and sign setup.exe (+ uninstaller)
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           CORE: ${{ needs.validate.outputs.core }}
@@ -231,23 +322,30 @@ jobs:
           $source = (Resolve-Path 'stage').Path
           $outDir = (Resolve-Path 'dist').Path
           $outName = "ion-strikers-$env:VERSION-windows-x86_64-setup"
+          $signCmd = (Resolve-Path 'tools\release\windows\sign-file.cmd').Path
 
+          # Inno SignTool "azure": cmd wrapper avoids ISCC mangling PowerShell -File quotes.
+          # $q$f$q expands to a quoted path for the file being signed (setup / uninstaller).
           & $iscc `
+            '/DEnableSign=1' `
             "/DMyAppVersion=$env:VERSION" `
             "/DMyAppVersionCore=$core" `
             "/DSourceDir=$source" `
             "/DOutputDir=$outDir" `
             "/DOutputName=$outName" `
+            "/Sazure=$signCmd `$q`$f`$q" `
             'tools\release\windows\ion-strikers.iss'
 
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
           Get-ChildItem dist | Format-Table Name, Length
 
-      - name: Upload Windows installer
+      - name: Upload Windows client artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/*.exe
+          path: |
+            dist/*-setup.exe
+            dist/*.zip
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
