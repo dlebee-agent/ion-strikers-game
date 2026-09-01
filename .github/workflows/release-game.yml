@@ -303,13 +303,10 @@ jobs:
           $source = (Resolve-Path 'stage').Path
           $outDir = (Resolve-Path 'dist').Path
           $outName = "ion-strikers-$env:VERSION-windows-x86_64-setup"
-          $signScript = (Resolve-Path 'tools\release\windows\sign-file.ps1').Path
-          $pwsh = (Get-Command pwsh).Source
+          $signCmd = (Resolve-Path 'tools\release\windows\sign-file.cmd').Path
 
-          # Inno SignTool "azure": signs setup.exe and the embedded uninstaller.
-          # Literal $q$f$q is expanded by ISCC to a quoted path.
-          $signTool = "$pwsh -NoProfile -ExecutionPolicy Bypass -File `"$signScript`" `$q`$f`$q"
-
+          # Inno SignTool "azure": cmd wrapper avoids ISCC mangling PowerShell -File quotes.
+          # $q$f$q expands to a quoted path for the file being signed (setup / uninstaller).
           & $iscc `
             '/DEnableSign=1' `
             "/DMyAppVersion=$env:VERSION" `
@@ -317,7 +314,7 @@ jobs:
             "/DSourceDir=$source" `
             "/DOutputDir=$outDir" `
             "/DOutputName=$outName" `
-            "/Sazure=$signTool" `
+            "/Sazure=$signCmd `$q`$f`$q" `
             'tools\release\windows\ion-strikers.iss'
 
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit $LASTEXITCODE" }
