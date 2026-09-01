@@ -368,20 +368,35 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           DMG_ROOT="$RUNNER_TEMP/dmgroot"
+          DMG_RW="$RUNNER_TEMP/ion-strikers.dmg"
           DMG="dist/ion-strikers-${VERSION}-macos-universal.dmg"
+          VOLNAME="Ion Strikers"
+          ICNS="$RUNNER_TEMP/volume.icns"
+
+          tools/release/make-icns.sh game/icon.png "$ICNS"
 
           mkdir -p "$DMG_ROOT"
           /usr/bin/ditto "${{ steps.export.outputs.client_app }}" \
             "$DMG_ROOT/$(basename "${{ steps.export.outputs.client_app }}")"
           ln -s /Applications "$DMG_ROOT/Applications"
 
+          # Read-write image so we can set a custom volume icon before compressing.
           hdiutil create \
-            -volname "Ion Strikers" \
+            -volname "$VOLNAME" \
             -srcfolder "$DMG_ROOT" \
             -fs HFS+ \
-            -format UDZO \
+            -format UDRW \
             -ov -quiet \
-            "$DMG"
+            "$DMG_RW"
+
+          MOUNT="$(hdiutil attach -readwrite -noverify "$DMG_RW" | awk '/Apple_HFS/{print $1; exit}')"
+          VOL="/Volumes/$VOLNAME"
+          cp "$ICNS" "$VOL/.VolumeIcon.icns"
+          SetFile -a C "$VOL"
+          hdiutil detach "$MOUNT" -quiet
+
+          hdiutil convert "$DMG_RW" -format UDZO -ov -quiet -o "$DMG"
+          rm -f "$DMG_RW"
 
           echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
 
