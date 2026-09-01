@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 8
+const PROTOCOL_VERSION := 7
 
 # Why a round ended, so the overlay can say so rather than always claiming
 # the losing side was wiped out.
