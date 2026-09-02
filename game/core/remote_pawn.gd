@@ -24,6 +24,8 @@ var display_name: String = ""
 ## Refreshed from the snapshot flags, because it stops being true the moment a
 ## dead player takes this body over.
 var is_bot: bool = false
+## This client's chosen finish; the match scene sets it before setup().
+var suit_style: String = SuitStyle.DEFAULT
 
 var _mannequin: Node3D
 var _skeleton: Skeleton3D
@@ -122,9 +124,14 @@ func _attach_gun() -> void:
 	_gun = model
 
 
+func apply_suit(style: String) -> void:
+	suit_style = SuitStyle.normalize(style)
+	_apply_tint()
+
+
 func _apply_tint() -> void:
 	var color_str := "blue" if team == Protocol.TEAM_BLUE else "red"
-	TeamTint.apply_body(_mannequin, color_str)
+	TeamTint.apply_body(_mannequin, color_str, suit_style)
 	TeamTint.apply_gun(_gun, color_str)
 
 

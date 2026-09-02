@@ -13,6 +13,7 @@ const CameraShake = preload("res://core/camera_shake.gd")
 const RagdollScript = preload("res://core/ragdoll.gd")
 const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
 const FxWarmScript = preload("res://core/fx_warm.gd")
+const SuitSettings = preload("res://core/suit_settings.gd")
 
 var pawn: LocalPawn
 var client: GameClient
@@ -105,6 +106,7 @@ func _ready() -> void:
 	_win_rounds = int(init_data.get("win_rounds", 10))
 	_max_spectators = int(init_data.get("max_spectators", 0))
 	client = game_client
+	SuitSettings.listen(_apply_suit_preference)
 	var my_init_id := int(init_data.get("id", 0))
 	if my_init_id != 0:
 		_player_names[my_init_id] = local_callsign
@@ -382,6 +384,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float, hp: int = 100) -> void:
 	_hud.set_stands_mode(false, _my_team)
 
 	pawn = LocalPawn.new()
+	pawn.suit_style = _suit_style()
 	add_child(pawn)
 	pawn.setup(_world)
 	pawn.movement.position = spawn_pos
@@ -413,6 +416,21 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float, hp: int = 100) -> void:
 	pawn.camera_rig.update_camera()
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _suit_style() -> String:
+	return SuitSettings.style
+
+
+func _apply_suit_preference() -> void:
+	var style := _suit_style()
+	if pawn:
+		pawn.suit_style = style
+		pawn.set_team(pawn.team_color)
+	for pid: int in _remotes:
+		var rp: RemotePawn = _remotes[pid]
+		if is_instance_valid(rp):
+			rp.apply_suit(style)
 
 
 # ── Physics + input ──────────────────────────────────────────────────────
@@ -793,6 +811,7 @@ func _on_snap(snap: Dictionary) -> void:
 			if p_team == Protocol.TEAM_NONE:
 				continue
 			var rp := RemotePawn.new()
+			rp.suit_style = _suit_style()
 			add_child(rp)
 			var rp_name: String = _player_names.get(pid, "Player %d" % pid)
 			rp.setup(pid, rp_name, p_team)

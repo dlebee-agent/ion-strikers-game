@@ -28,6 +28,15 @@ func _initialize() -> void:
 	_check(int(snap.get("clock_mode", -1)) == Protocol.CLOCK_DOWN, "snap carries the clock mode")
 	_check(int(snap.get("round_num", -1)) == 2, "snap fields after the clock still read")
 
+	var create := Protocol.decode(Protocol.encode_create_game(
+		"parkour", "arena", 10, 50, 12, 12, true, true, true, 1, "Room"))
+	_check(str(create.get("display_name", "")) == "Room", "create display name still reads")
+	var init := Protocol.decode(Protocol.encode_init(
+		7, "red", "parkour", "arena", 0, 0, 1, 10, 50, true, "active", 4))
+	_check(int(init.get("max_spectators", -1)) == 4, "init spectators still read")
+	_check(SuitStyle.normalize("DARK") == SuitStyle.DARK, "suit style ids are case-insensitive")
+	_check(SuitStyle.normalize("plaid") == SuitStyle.DEFAULT, "an unknown suit style falls back to the default")
+
 	# A drawn round: no winner, and a reason that is not elimination.
 	var drawn := Protocol.decode(Protocol.encode_round_end(
 		Protocol.TEAM_NONE, 5, 5, false, false, 7, Protocol.END_TIME))

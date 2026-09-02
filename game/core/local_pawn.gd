@@ -28,6 +28,8 @@ var _tp_skeleton: Skeleton3D
 var _fp_anim_player: AnimationPlayer
 var _world: CollisionWorld = null
 var team_color: String = "blue"
+## This client's chosen finish; the match scene sets it before setup().
+var suit_style: String = SuitStyle.DEFAULT
 # Bumped to abandon a queued return-to-idle, standing in for clearTimeout().
 var _fp_once_gen := 0
 # Both bodies get an orb: only one is on screen at a time, but switching view
@@ -337,8 +339,8 @@ func set_team(color: String) -> void:
 	_apply_team_tint()
 
 func _apply_team_tint() -> void:
-	TeamTint.apply_body(_mannequin_instance, team_color)
-	TeamTint.apply_body(_fp_arms_instance, team_color)
+	TeamTint.apply_body(_mannequin_instance, team_color, suit_style)
+	TeamTint.apply_body(_fp_arms_instance, team_color, suit_style)
 	TeamTint.apply_gun(_tp_gun_instance, team_color)
 	TeamTint.apply_gun(_fp_gun_instance, team_color)
 

@@ -4,6 +4,7 @@ const LocalPawn = preload("res://core/local_pawn.gd")
 const CameraRig = preload("res://core/camera_rig.gd")
 const AnimDriver = preload("res://core/anim_driver.gd")
 const HitboxDebugScript = preload("res://core/hitbox_debug.gd")
+const SuitSettings = preload("res://core/suit_settings.gd")
 
 # Long enough to cover the discharge clip plus its blend out.
 const SPECIAL_DISCHARGE_HOLD := 0.55
@@ -14,8 +15,8 @@ func _fp_hint() -> String:
 		InputBinds.primary("jump").to_upper(),
 		InputBinds.primary("controls").to_upper(),
 	]
-const HINT_TP := "mouse orbits · WASD moves relative to camera (walk toward it to see the front) · scroll zooms · ESC frees cursor"
-const HINT_PREVIEW := "drag to orbit · scroll to zoom · ◀ ▶ steps clips · ESC to leave"
+const HINT_TP := "mouse orbits · WASD moves relative to camera (walk toward it to see the front) · scroll or +/− zooms · ESC frees cursor"
+const HINT_PREVIEW := "drag to orbit · scroll or +/− to zoom · ◀ ▶ steps clips · ESC to leave"
 
 
 @onready var hud: Control = %DesignerHUD
@@ -35,6 +36,7 @@ const HINT_PREVIEW := "drag to orbit · scroll to zoom · ◀ ▶ steps clips ·
 @onready var mode_preview: Button = %ModePreview
 @onready var team_blue: Button = %TeamBlue
 @onready var team_red: Button = %TeamRed
+@onready var suit_select: OptionButton = %SuitSelect
 @onready var special_btn: Button = %SpecialBtn
 @onready var clip_prev_btn: Button = %ClipPrev
 @onready var clip_next_btn: Button = %ClipNext
@@ -46,6 +48,7 @@ var _world: CollisionWorld = null
 var _controls_visible := false
 var _current_clip_index := -1
 var _clip_names: PackedStringArray = []
+var _team := "blue"
 
 func _ready() -> void:
 	add_to_group("match_scene")
@@ -173,6 +176,7 @@ func _draw_grid(arena_size: float) -> void:
 
 func _setup_pawn() -> void:
 	pawn = LocalPawn.new()
+	pawn.suit_style = SuitSettings.style
 	add_child(pawn)
 	pawn.setup(_world)
 	pawn.movement.position = Vector3(0, 0.1, 0)
@@ -191,6 +195,14 @@ func _setup_toolbar() -> void:
 	clip_prev_btn.pressed.connect(_clip_prev)
 	clip_next_btn.pressed.connect(_clip_next)
 	clip_select.item_selected.connect(_on_clip_selected)
+	# Same preference as Settings, so a finish can be checked in each pose
+	# and camera without hosting a game for it.
+	suit_select.clear()
+	for i in SuitStyle.STYLES.size():
+		suit_select.add_item(SuitStyle.label_for(SuitStyle.STYLES[i]))
+		suit_select.set_item_metadata(i, SuitStyle.STYLES[i])
+	suit_select.select(SuitStyle.index_of(pawn.suit_style))
+	suit_select.item_selected.connect(_on_suit_selected)
 
 func _setup_hud() -> void:
 	hp_label.text = "100"
@@ -248,9 +260,17 @@ func _on_special_discharged() -> void:
 		pawn.anim_driver.set_state(AnimDriver.State.IDLE)
 
 func _set_team(color: String) -> void:
+	_team = color
 	pawn.set_team(color)
 	team_blue.disabled = (color == "blue")
 	team_red.disabled = (color == "red")
+
+func _on_suit_selected(index: int) -> void:
+	var id := str(suit_select.get_item_metadata(index))
+	SuitSettings.set_style(id)
+	pawn.suit_style = id
+	# set_team repaints the body and arms with the new finish.
+	pawn.set_team(_team)
 
 func _on_back() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -311,6 +331,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if pawn and pawn.camera_rig:
 				pawn.camera_rig.handle_scroll(mb.factor if mb.button_index == MOUSE_BUTTON_WHEEL_UP else -mb.factor)
+
+	if event is InputEventKey:
+		var key := event as InputEventKey
+		if key.pressed and pawn and pawn.camera_rig:
+			var orbiting := pawn.camera_rig.mode == CameraRig.Mode.PREVIEW \
+				or pawn.camera_rig.mode == CameraRig.Mode.THIRD_PERSON
+			if orbiting:
+				if key.keycode == KEY_EQUAL or key.keycode == KEY_PLUS or key.keycode == KEY_KP_ADD:
+					pawn.camera_rig.handle_zoom_key(true)
+					get_viewport().set_input_as_handled()
+				elif key.keycode == KEY_MINUS or key.keycode == KEY_KP_SUBTRACT:
+					pawn.camera_rig.handle_zoom_key(false)
+					get_viewport().set_input_as_handled()
 
 	if event.is_action_pressed("game_controls"):
 		_controls_visible = not _controls_visible

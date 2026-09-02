@@ -8,6 +8,7 @@ extends Control
 
 signal close_requested
 
+const SuitSettings := preload("res://core/suit_settings.gd")
 const BACKDROP := Color(0.043, 0.039, 0.086, 1.0)
 const BIND_ROW_BG := Color(0.043, 0.039, 0.086, 0.55)
 const KEY_COL_W := 96
@@ -29,8 +30,14 @@ var _thick_val: Label
 var _gap_val: Label
 var _alpha_val: Label
 var _invert_check: Button
+var _suit_btns: Dictionary = {}
+var _suit_desc: Label
+var _suit_preview: SuitPreview
 var _color_buttons: Dictionary = {}
 var _binds_container: VBoxContainer
+var _tab_btns: Dictionary = {}
+var _pages: Dictionary = {}
+var _current_tab: String = "controls"
 
 var _listening_action: String = ""
 var _listening_slot: int = -1
@@ -51,6 +58,7 @@ func _ready() -> void:
 	_rebuild_binds()
 	InputBinds.bindings_changed.connect(_rebuild_binds)
 	CrosshairSettings.changed.connect(_sync_crosshair_controls)
+	visibility_changed.connect(_sync_preview_active)
 
 
 ## Pulls every control back in line with the stored settings. Worth calling on
@@ -65,7 +73,12 @@ func refresh() -> void:
 	_sens_slider.set_value_no_signal(InputSettings.slider_value())
 	_sens_val.text = "%.2f" % InputSettings.sensitivity
 	_invert_check.set_pressed_no_signal(InputSettings.invert_y)
+	_paint_suit_btns()
+	_suit_desc.text = SuitStyle.blurb_for(SuitSettings.style)
+	if _suit_preview:
+		_suit_preview.set_style(SuitSettings.style)
 	_sync_crosshair_controls()
+	_sync_preview_active()
 
 
 func is_listening() -> bool:
@@ -118,22 +131,86 @@ func _build(back_text: String, opaque: bool) -> void:
 	col.add_child(MenuLook.kicker("Configuration"))
 	col.add_child(MenuLook.heading("SETTINGS", 40))
 
-	var grid := HBoxContainer.new()
-	grid.add_theme_constant_override("separation", 20)
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var grid_m := MarginContainer.new()
-	grid_m.add_theme_constant_override("margin_top", 18)
-	grid_m.add_child(grid)
-	col.add_child(grid_m)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 8)
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var tabs_m := MarginContainer.new()
+	tabs_m.add_theme_constant_override("margin_top", 18)
+	tabs_m.add_child(tabs)
+	col.add_child(tabs_m)
 
-	grid.add_child(_build_audio_panel())
-	grid.add_child(_build_binds_panel())
+	for pair in [
+		["controls", "Controls"],
+		["sound", "Sound"],
+		["mouse", "Mouse"],
+		["skins", "Skins"],
+	]:
+		var id: String = pair[0]
+		var btn := Button.new()
+		btn.text = str(pair[1]).to_upper()
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_show_tab.bind(id))
+		tabs.add_child(btn)
+		_tab_btns[id] = btn
+
+	var stack := VBoxContainer.new()
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var stack_m := MarginContainer.new()
+	stack_m.add_theme_constant_override("margin_top", 14)
+	stack_m.add_child(stack)
+	col.add_child(stack_m)
+
+	_pages["controls"] = _build_binds_panel()
+	_pages["sound"] = _build_sound_panel()
+	_pages["mouse"] = _build_mouse_panel()
+	_pages["skins"] = _build_skins_panel()
+	for page_id in _pages:
+		stack.add_child(_pages[page_id])
+	_show_tab(_current_tab)
 
 
-func _build_audio_panel() -> PanelContainer:
-	var vol := PanelContainer.new()
-	vol.custom_minimum_size.x = 320
-	MenuLook.apply_panel(vol, 18)
+func _show_tab(id: String) -> void:
+	if id != "controls" and is_listening():
+		cancel_listening()
+	_current_tab = id
+	for page_id in _pages:
+		(_pages[page_id] as Control).visible = page_id == id
+	for tab_id in _tab_btns:
+		_apply_tab(_tab_btns[tab_id], tab_id == id)
+	_sync_preview_active()
+
+
+func _sync_preview_active() -> void:
+	if _suit_preview:
+		_suit_preview.set_active(is_visible_in_tree() and _current_tab == "skins")
+
+
+func _apply_tab(btn: Button, active: bool) -> void:
+	var border := MenuLook.CY if active else MenuLook.LINE
+	var bg := MenuLook.CARD_BG if active else MenuLook.GHOST_BG
+	var s := MenuLook.box(bg, border, 4)
+	s.content_margin_left = 16
+	s.content_margin_right = 16
+	s.content_margin_top = 11
+	s.content_margin_bottom = 11
+	var hover := MenuLook.box(bg, Color(MenuLook.CY, 0.45) if not active else border, 4)
+	hover.content_margin_left = 16
+	hover.content_margin_right = 16
+	hover.content_margin_top = 11
+	hover.content_margin_bottom = 11
+	var col := MenuLook.CY if active else MenuLook.INK_2
+	MenuLook.style_button(btn, s, hover, col, MenuLook.FONT_HEADING, 14)
+
+
+func _make_panel() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	MenuLook.apply_panel(panel, 18)
+	return panel
+
+
+func _build_sound_panel() -> PanelContainer:
+	var vol := _make_panel()
 	var vv := VBoxContainer.new()
 	vol.add_child(vv)
 	vv.add_child(MenuLook.kicker("Volume"))
@@ -150,11 +227,14 @@ func _build_audio_panel() -> PanelContainer:
 		AudioMix.set_music(int(v))
 		_music_val.text = "%d%%" % int(v))
 	_music_val = vv.get_meta("last_val")
+	return vol
 
-	var mouse_k := MarginContainer.new()
-	mouse_k.add_theme_constant_override("margin_top", 24)
-	mouse_k.add_child(MenuLook.kicker("Mouse"))
-	vv.add_child(mouse_k)
+
+func _build_mouse_panel() -> PanelContainer:
+	var mouse := _make_panel()
+	var vv := VBoxContainer.new()
+	mouse.add_child(vv)
+	vv.add_child(MenuLook.kicker("Look"))
 
 	_sens_slider = _slider_row(vv, "Sensitivity", "Applies to looking around in a match",
 		InputSettings.slider_value(), func(v: float) -> void:
@@ -208,8 +288,50 @@ func _build_audio_panel() -> PanelContainer:
 	_alpha_val = vv.get_meta("last_val")
 
 	_add_color_swatches(vv)
+	return mouse
 
-	return vol
+
+func _build_skins_panel() -> PanelContainer:
+	var skins := _make_panel()
+	var vv := VBoxContainer.new()
+	skins.add_child(vv)
+	vv.add_child(MenuLook.kicker("Suit"))
+	var suit_note := MenuLook.mono("How every player looks on this machine.", 10, MenuLook.MUTE_3)
+	suit_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vv.add_child(suit_note)
+
+	_suit_preview = SuitPreview.new()
+	_suit_preview.set_style(SuitSettings.style)
+	var preview_m := MarginContainer.new()
+	preview_m.add_theme_constant_override("margin_top", 14)
+	preview_m.add_child(_suit_preview)
+	vv.add_child(preview_m)
+	vv.add_child(MenuLook.kicker("Drag to spin · blue · red", MenuLook.MUTE_3, 10))
+
+	var grid := VBoxContainer.new()
+	grid.add_theme_constant_override("separation", 8)
+	var grid_m := MarginContainer.new()
+	grid_m.add_theme_constant_override("margin_top", 12)
+	grid_m.add_child(grid)
+	vv.add_child(grid_m)
+	var row: HBoxContainer = null
+	for i in SuitStyle.STYLES.size():
+		if i % 2 == 0:
+			row = HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			grid.add_child(row)
+		var id := SuitStyle.STYLES[i]
+		var btn := Button.new()
+		btn.text = SuitStyle.label_for(id)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_suit_picked.bind(id))
+		row.add_child(btn)
+		_suit_btns[id] = btn
+	_paint_suit_btns()
+	_suit_desc = MenuLook.mono(SuitStyle.blurb_for(SuitSettings.style), 10, MenuLook.MUTE_3)
+	_suit_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vv.add_child(_suit_desc)
+	return skins
 
 
 func _build_binds_panel() -> PanelContainer:
@@ -244,6 +366,20 @@ func _build_binds_panel() -> PanelContainer:
 	bv.add_child(reset_m)
 
 	return binds
+
+
+func _on_suit_picked(id: String) -> void:
+	SuitSettings.set_style(id)
+	_suit_desc.text = SuitStyle.blurb_for(id)
+	if _suit_preview:
+		_suit_preview.set_style(id)
+	_paint_suit_btns()
+
+
+func _paint_suit_btns() -> void:
+	var current := SuitSettings.style
+	for id in _suit_btns:
+		_apply_tab(_suit_btns[id], str(id) == current)
 
 
 func _px_fmt(value: float) -> String:

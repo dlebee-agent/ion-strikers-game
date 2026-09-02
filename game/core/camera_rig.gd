@@ -18,6 +18,8 @@ const ORBIT_PITCH_MAX := 60.0
 # standing body sits in frame rather than being centred on its feet.
 const ORBIT_PIVOT_HEIGHT := 1.1
 const ORBIT_LOOK_HEIGHT := 1.0
+const ORBIT_DIST_MIN := 0.5
+const ORBIT_DIST_MAX := 8.0
 
 var mode: Mode = Mode.FIRST_PERSON
 var orbit_yaw: float = 0.0
@@ -74,7 +76,12 @@ func handle_mouse_motion(rel: Vector2) -> void:
 
 func handle_scroll(delta: float) -> void:
 	if mode == Mode.PREVIEW or mode == Mode.THIRD_PERSON:
-		tp_distance = clampf(tp_distance + sign(delta) * 0.4, 2.4, 8.0)
+		tp_distance = clampf(tp_distance + sign(delta) * 0.4, ORBIT_DIST_MIN, ORBIT_DIST_MAX)
+
+
+## + zooms in (closer), − zooms out. Same range as the scroll wheel.
+func handle_zoom_key(zoom_in: bool) -> void:
+	handle_scroll(-1.0 if zoom_in else 1.0)
 
 func update_camera() -> void:
 	if not _movement:

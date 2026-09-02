@@ -452,7 +452,7 @@ func _build_controls() -> void:
 
 	_settings_btn = Button.new()
 	_settings_btn.text = "SETTINGS"
-	_settings_btn.tooltip_text = "Volume · mouse · crosshair · rebind keys"
+	_settings_btn.tooltip_text = "Controls · sound · mouse · skins"
 	_settings_btn.custom_minimum_size = Vector2(110, 36)
 	_settings_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_settings_btn.position = Vector2(-400, 16)

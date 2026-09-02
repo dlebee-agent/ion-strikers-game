@@ -194,6 +194,12 @@ text = "RED"
 theme_override_font_sizes/font_size = 12
 theme_override_colors/font_color = Color(1, 0.294, 0.341, 1)
 
+[node name="SuitSelect" type="OptionButton" parent="UILayer/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+custom_minimum_size = Vector2(190, 0)
+theme_override_font_sizes/font_size = 12
+
 [node name="Sep3" type="VSeparator" parent="UILayer/Toolbar"]
 layout_mode = 2
 
