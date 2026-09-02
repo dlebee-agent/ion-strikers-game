@@ -18,6 +18,7 @@ func _initialize() -> void:
 	_inherits_the_body()
 	_first_claim_wins()
 	_the_living_may_not_claim()
+	_the_stands_may_not_claim()
 	_enemy_bots_are_not_offered()
 	_a_dead_bot_is_not_a_body()
 	_kills_read_as_the_player()
@@ -95,6 +96,27 @@ func _the_living_may_not_claim() -> void:
 	_bot(inst, -1, Protocol.TEAM_BLUE)
 	_expect("alive", not inst.handle_takeover(1, -1), "a standing player is refused")
 	_expect("alive", inst.participants.has(-1), "the bot keeps its body")
+	_free(inst)
+
+
+## Someone in the stands has no side, so no bot is theirs to take. Note that
+## being dead is not what stops them — a spectator has no pawn at all, so the
+## "are you standing up" test passes them straight through. It is having no
+## team that does, and it has to: otherwise the stands would be a way around
+## the team menu and the capacity and balance limits it applies.
+func _the_stands_may_not_claim() -> void:
+	var inst := _match("arena", false)
+	_join(inst, 1, Protocol.TEAM_BLUE)
+	_join(inst, 2, Protocol.TEAM_RED)
+	_bot(inst, -1, Protocol.TEAM_BLUE)
+
+	var watcher := Participant.new(4, "P4", false)
+	watcher.team = Protocol.TEAM_NONE
+	inst.participants[4] = watcher
+	_expect("stands", not inst.pawns.has(4), "a spectator starts with no pawn at all")
+	_expect("stands", not inst.handle_takeover(4, -1), "and is refused")
+	_expect("stands", inst.participants.has(-1), "the bot keeps its body")
+	_expect("stands", not inst.pawns.has(4), "the spectator is still not on the field")
 	_free(inst)
 
 
