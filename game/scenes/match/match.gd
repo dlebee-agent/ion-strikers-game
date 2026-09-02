@@ -359,7 +359,7 @@ func _enter_stands() -> void:
 	_hud.hide_spectator_panel()
 
 
-func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
+func _spawn_local_pawn(spawn_pos: Vector3, yaw: float, hp: int = 100) -> void:
 	if _local_ragdoll:
 		_local_ragdoll.end()
 		_local_ragdoll = null
@@ -388,7 +388,7 @@ func _spawn_local_pawn(spawn_pos: Vector3, yaw: float) -> void:
 	_alive = true
 	_special_spent = false
 	pawn.weapon.special_armed = _special_armed
-	_hud.update_hp(100)
+	_hud.update_hp(hp)
 	_sync_special_hud()
 
 	pawn.weapon.fired.connect(_on_local_fire)
@@ -576,12 +576,31 @@ func _unhandled_input(event: InputEvent) -> void:
 				elif event.is_action_pressed("ui_left"):
 					_spectator.cycle_target(-1, _remotes, -1)
 		elif not _alive:
+			if InputBinds.is_action_just_pressed("action"):
+				_try_takeover()
 			if event.is_action_pressed("ui_right") \
 					or InputBinds.is_action_just_pressed("right"):
 				_spectator.leave_death_for_teammate(1, _remotes, _my_team)
 			elif event.is_action_pressed("ui_left") \
 					or InputBinds.is_action_just_pressed("left"):
 				_spectator.leave_death_for_teammate(-1, _remotes, _my_team)
+
+
+## Ask for the body of the bot the death camera is riding. Nothing is predicted:
+## two dead players can press this on the same bot in the same frame, and the
+## server hands it to whichever request lands first. A refusal arrives as
+## silence, with the answer on screen a moment later — the body either keeps
+## being a bot, or wears the name of whoever got there first.
+func _try_takeover() -> void:
+	if _match_over or _outro_active or client == null:
+		return
+	var tid := _spectator.target_id()
+	if tid == 0 or not _remotes.has(tid):
+		return
+	var rp: RemotePawn = _remotes[tid]
+	if not is_instance_valid(rp) or not rp.is_bot or not rp.alive or rp.team != _my_team:
+		return
+	client.send_takeover(tid)
 
 
 # ── Combat events from local weapons ────────────────────────────────────
@@ -721,6 +740,7 @@ func _on_snap(snap: Dictionary) -> void:
 			var p_team := int(p.get("team", 0))
 			if p_team != rp.team:
 				rp.set_team_value(p_team)
+			rp.is_bot = p_bot
 			var was_alive := rp.alive
 			rp.push_snapshot(p, _sample_clock)
 			# The alive flag only updates during interpolate(), but the
@@ -736,6 +756,7 @@ func _on_snap(snap: Dictionary) -> void:
 			add_child(rp)
 			var rp_name: String = _player_names.get(pid, "Player %d" % pid)
 			rp.setup(pid, rp_name, p_team)
+			rp.is_bot = p_bot
 			# Joining mid-round means their death already happened off screen.
 			rp.adopt_initial_alive(p_alive)
 			rp.push_snapshot(p, _sample_clock)
@@ -884,7 +905,7 @@ func _on_respawn(msg: Dictionary) -> void:
 		var sy := float(msg.get("y", 0.0))
 		var sz := float(msg.get("z", 0.0))
 		var yaw := float(msg.get("yaw", 0.0))
-		_spawn_local_pawn(Vector3(sx, sy, sz), yaw)
+		_spawn_local_pawn(Vector3(sx, sy, sz), yaw, int(msg.get("hp", 100)))
 		# A round-start redeploy gets the round fanfare instead of the respawn sting.
 		if Announcer and not bool(msg.get("round_start", false)):
 			Announcer.player_respawn()

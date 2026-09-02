@@ -231,6 +231,11 @@ func has_death_can_leave() -> bool:
 	return _death_can_leave
 
 
+## Who the camera is riding, or 0 in free-fly and while settling on a corpse.
+func target_id() -> int:
+	return _target_id
+
+
 func leave_death_for_teammate(dir: int, remotes: Dictionary, my_team: int) -> bool:
 	if follow_state == FollowState.DEATH_SETTLE:
 		if not _death_can_leave:
@@ -270,9 +275,13 @@ func get_panel_info(remotes: Dictionary, team: int) -> Dictionary:
 		if _target_id != 0 and remotes.has(_target_id) and is_instance_valid(remotes[_target_id]):
 			var rp: RemotePawn = remotes[_target_id]
 			var team_color := Color("#5b9bff") if team == Protocol.TEAM_BLUE else Color("#ff6b74")
+			var sub := "Teammate view \u00b7 CLICK / \u2190 \u2192 to switch"
+			var take := _takeover_label()
+			if rp.is_bot and not take.is_empty():
+				sub = "%s to take over \u00b7 CLICK / \u2190 \u2192 to switch" % take
 			return {
 				"who": rp.display_name,
-				"sub": "Teammate view \u00b7 CLICK / \u2190 \u2192 to switch",
+				"sub": sub,
 				"color": team_color,
 			}
 		return {
@@ -301,6 +310,14 @@ func get_panel_info(remotes: Dictionary, team: int) -> Dictionary:
 		"sub": "First-person \u00b7 %s \u2192 free-fly" % swap_key,
 		"color": Color("#8fd6ff"),
 	}
+
+
+## Empty when the player has cleared the bind, in which case the panel says
+## nothing about a key that would do nothing.
+func _takeover_label() -> String:
+	if InputBinds and InputBinds.bindings.has("action"):
+		return (InputBinds.primary("action") as String).to_upper()
+	return ""
 
 
 func _spec_swap_label() -> String:

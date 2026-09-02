@@ -10,6 +10,10 @@ const RULE_W := 520.0
 const TITLE_SIZE := 78
 const SCORE_SIZE := 64
 
+## Every line carries its own contrast, because between rounds the card sits
+## straight on the live scene with nothing behind it to read against.
+const OUTLINE := Color(0.02, 0.03, 0.06, 0.72)
+
 var _dim: ColorRect
 var _flare: ColorRect
 var _flare_mat: ShaderMaterial
@@ -60,6 +64,11 @@ func present(winner: int, score_blue: int, score_red: int, round_num: int, match
 	_red_score.add_theme_color_override("font_color", accent if not blue_win and not draw else MenuLook.MUTE)
 	_blue_tag.add_theme_color_override("font_color", Color(accent, 0.7) if blue_win else MenuLook.MUTE_2)
 	_red_tag.add_theme_color_override("font_color", Color(accent, 0.7) if not blue_win and not draw else MenuLook.MUTE_2)
+
+	# Blacking the level out to announce a round the match then carries on from
+	# takes the game away from you a dozen times a match. The end of the match
+	# is the one time there is nothing left to watch, so that one still dims.
+	_dim.visible = match_over
 
 	_show(match_over)
 
@@ -157,6 +166,7 @@ func _build() -> void:
 	add_child(_flare)
 
 	_header = MenuLook.kicker("", Color(0.86, 0.89, 0.94, 0.82), 13)
+	_outline(_header, 5)
 	_header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_header.anchor_left = 0.0
 	_header.anchor_right = 1.0
@@ -185,8 +195,7 @@ func _build() -> void:
 
 	_title = MenuLook.heading("BLUE WINS", TITLE_SIZE, MenuLook.CY)
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title.add_theme_constant_override("outline_size", 10)
-	_title.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.06, 0.72))
+	_outline(_title, 10)
 	title_col.add_child(_title)
 
 	_rule_bot = _rule()
@@ -239,13 +248,20 @@ func _score_col() -> Array:
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var tag := MenuLook.kicker("", MenuLook.MUTE_2, 11)
+	_outline(tag, 5)
 	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrap.add_child(tag)
 
 	var num := MenuLook.heading("0", SCORE_SIZE, MenuLook.INK)
+	_outline(num, 8)
 	num.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrap.add_child(num)
 	return [tag, num, wrap]
+
+
+static func _outline(label: Label, size: int) -> void:
+	label.add_theme_constant_override("outline_size", size)
+	label.add_theme_color_override("font_outline_color", OUTLINE)
 
 
 func _rule() -> ColorRect:

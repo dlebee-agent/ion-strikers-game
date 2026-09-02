@@ -13,6 +13,7 @@ const BIND_DEFAULTS: Dictionary = {
 	"fire": ["Mouse1", ""],
 	"melee": ["Mouse2", ""],
 	"special": ["F", ""],
+	"action": ["E", ""],
 	"scoreboard": ["Tab", "L"],
 	"controls": ["H", ""],
 	"team_menu": ["M", ""],
@@ -24,7 +25,7 @@ const BIND_DEFAULTS: Dictionary = {
 
 const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
-	["Combat", ["fire", "melee", "special"]],
+	["Combat", ["fire", "melee", "special", "action"]],
 	["Communication", ["chat_all", "chat_team"]],
 	["Interface", ["team_menu", "scoreboard", "controls", "spec_swap", "console"]],
 ]
@@ -40,6 +41,7 @@ const BIND_LABELS: Dictionary = {
 	"fire": "Fire laser",
 	"melee": "Melee",
 	"special": "Special attack (hold)",
+	"action": "Action / take over a bot",
 	"scoreboard": "Scoreboard (hold)",
 	"controls": "Controls card",
 	"team_menu": "Team menu",
@@ -99,6 +101,16 @@ func _load_saved() -> void:
 			chat[0] = "Y"
 		bindings["chat_all"] = chat
 		save_bindings()
+	# "action" is newer than the save file, so its default key can already be
+	# spoken for. Leave the older bind alone and start unbound rather than
+	# firing two things off one press.
+	if not cfg.has_section_key("binds", "action_primary"):
+		var wanted: String = bindings["action"][0]
+		for other: String in bindings:
+			if other != "action" and not wanted.is_empty() and (bindings[other] as Array).has(wanted):
+				bindings["action"][0] = ""
+				save_bindings()
+				break
 
 func save_bindings() -> void:
 	var cfg := ConfigFile.new()
