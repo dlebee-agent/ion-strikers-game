@@ -35,11 +35,27 @@ func _initialize() -> void:
 	_check(int(drawn.get("reason", -1)) == Protocol.END_TIME, "round end carries its reason")
 	_check(int(drawn.get("round_num", -1)) == 7, "round end number survives")
 
+	# A takeover respawns you into a body that has already been shot at, so the
+	# health rides along instead of being assumed full.
+	var hurt := Protocol.decode(Protocol.encode_respawn(4, 1.0, 2.0, 3.0, 90.0, false, 42))
+	_check(int(hurt.get("hp", -1)) == 42, "respawn carries health")
+	var fresh := Protocol.decode(Protocol.encode_respawn(4, 1.0, 2.0, 3.0, 90.0, true))
+	_check(int(fresh.get("hp", -1)) == 100, "a plain respawn is full health")
+	_check(bool(fresh.get("round_start", false)), "and still reads its round-start flag")
+
+	# Bot ids are handed out downward from -1, so the body a player asks for is
+	# signed and would come back as a huge positive number if it were not.
+	var claim := Protocol.decode(Protocol.encode_takeover(-3))
+	_check(int(claim.get("t", -1)) == Protocol.Msg.TAKEOVER, "takeover type")
+	_check(int(claim.get("target_id", 0)) == -3, "takeover carries a negative bot id")
+
 	# A type value one past everything this build knows: decode must hand back
-	# just the header, the shape older builds see when a HELLO arrives.
+	# just the header, the shape older builds see when a HELLO arrives. Read off
+	# the enum rather than a named member, so adding a message cannot quietly
+	# turn this into a test of that message.
 	var b := StreamPeerBuffer.new()
 	b.big_endian = false
-	b.put_u8(Protocol.Msg.HELLO + 1)
+	b.put_u8(Protocol.Msg.size())
 	b.put_u8(0)
 	b.put_u8(99)
 	var unknown := Protocol.decode(b.data_array)

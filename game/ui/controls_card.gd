@@ -40,6 +40,7 @@ const DESCRIPTIONS := {
 	"team_menu": "Team menu — costs a life",
 	"controls": "This controls card",
 	"spec_swap": "Overhead / first-person",
+	"action": "Take over the bot you are watching",
 }
 
 var _left_col: VBoxContainer
@@ -177,6 +178,7 @@ func _rebuild() -> void:
 	])
 	_group(_right_col, "SPECTATING", MenuLook.CY, [
 		[_keys("spec_swap"), DESCRIPTIONS["spec_swap"]],
+		[_keys("action"), DESCRIPTIONS["action"]],
 		[["LEFT", "RIGHT"], "Cycle players"],
 	])
 

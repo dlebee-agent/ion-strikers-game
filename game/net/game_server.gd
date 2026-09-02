@@ -255,6 +255,8 @@ func _on_receive(peer_id: int, channel: int, data: PackedByteArray) -> void:
 				_handle_set_team(peer_id, msg)
 			Protocol.Msg.TEAM_MENU:
 				_handle_team_menu(peer_id)
+			Protocol.Msg.TAKEOVER:
+				_handle_takeover(peer_id, msg)
 			Protocol.Msg.SHOT:
 				_handle_shot(peer_id, msg)
 			Protocol.Msg.MELEE:
@@ -423,6 +425,13 @@ func _handle_set_team(peer_id: int, msg: Dictionary) -> void:
 	if inst == null:
 		return
 	inst.handle_set_team(peer_id, int(msg.get("team", 0)))
+
+
+func _handle_takeover(peer_id: int, msg: Dictionary) -> void:
+	var inst := _get_instance(peer_id)
+	if inst == null:
+		return
+	inst.handle_takeover(peer_id, int(msg.get("target_id", 0)))
 
 
 func _handle_team_menu(peer_id: int) -> void:

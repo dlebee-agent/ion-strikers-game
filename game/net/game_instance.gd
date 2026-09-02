@@ -270,6 +270,57 @@ func handle_set_team(peer_id: int, new_team: int) -> void:
 	_roster_dirty = true
 
 
+## A dead player inherits the body of a bot on their own side: the pawn keeps
+## its place, health and protection, and the human's participant takes it over.
+## The bot itself is gone — its brain lives in its participant, so erasing that
+## is what stops it thinking, and it is also what settles a race between two
+## dead players. Whoever's request lands first finds a bot; the second finds
+## nothing to take. Attribution needs no extra plumbing after that: the body
+## belongs to the player's participant, so the kill feed, the roster and the
+## scoreboard all read their name from here on.
+func handle_takeover(peer_id: int, bot_id: int) -> bool:
+	if not participants.has(peer_id) or not participants.has(bot_id):
+		return false
+	if match_state.round_state != Protocol.RS_ACTIVE:
+		return false
+
+	var p: Participant = participants[peer_id]
+	if p.is_bot or p.team == Protocol.TEAM_NONE:
+		return false
+	var own: ServerPawn = pawns.get(peer_id)
+	if own != null and own.alive:
+		return false
+
+	var bot: Participant = participants[bot_id]
+	if not bot.is_bot or bot.team != p.team:
+		return false
+	var bot_pawn: ServerPawn = pawns.get(bot_id)
+	if bot_pawn == null or not bot_pawn.alive:
+		return false
+
+	var bot_name := bot.display_name
+	bot_pawn.participant_id = peer_id
+	# Whatever the dead body had queued in deathmatch is void now.
+	bot_pawn.respawn_at = 0.0
+	pawns[peer_id] = bot_pawn
+	pawns.erase(bot_id)
+	participants.erase(bot_id)
+
+	event_to_peer.emit(peer_id, Protocol.CH_EVENTS, Protocol.encode_respawn(
+		peer_id, bot_pawn.position.x, bot_pawn.position.y, bot_pawn.position.z,
+		bot_pawn.yaw, false, bot_pawn.hp))
+	_sys_chat("%s took over %s." % [p.display_name, bot_name])
+	_roster_dirty = true
+
+	# An arena round is an elimination, so the replacement bot must not walk on
+	# mid-round: the side would be a body up on the one it started with. Round
+	# start rebalances. Deathmatch has no such moment, so it refills now.
+	if mode == "dm":
+		_manage_bots()
+
+	return true
+
+
 # ── State updates from client ────────────────────────────────────────────
 
 func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool,

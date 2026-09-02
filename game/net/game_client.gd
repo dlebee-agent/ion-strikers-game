@@ -122,6 +122,13 @@ func send_set_team(team: int) -> void:
 	_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
 
 
+func send_takeover(target_id: int) -> void:
+	if not _authed or _peer == null:
+		return
+	var buf := Protocol.encode_takeover(target_id)
+	_peer.send(Protocol.CH_HANDSHAKE, buf, ENetPacketPeer.FLAG_RELIABLE)
+
+
 func send_team_menu() -> void:
 	if not _authed or _peer == null:
 		return

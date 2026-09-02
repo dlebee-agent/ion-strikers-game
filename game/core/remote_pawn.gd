@@ -21,6 +21,9 @@ var peer_id: int = 0
 var team: int = 0
 var alive: bool = true
 var display_name: String = ""
+## Refreshed from the snapshot flags, because it stops being true the moment a
+## dead player takes this body over.
+var is_bot: bool = false
 
 var _mannequin: Node3D
 var _skeleton: Skeleton3D
