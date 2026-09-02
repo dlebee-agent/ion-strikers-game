@@ -24,6 +24,11 @@ var _mode: String = "arena"
 var _my_team: int = 0
 var _in_stands := true
 var _alive := false
+## Bot id we are riding (daemon possession). Scoreboard row stays ours; frags
+## land on the bot. `_ridden_id` stays set through the local ragdoll so the
+## remote copy of that body does not spawn a second corpse.
+var _possessing_id: int = 0
+var _ridden_id: int = 0
 var _special_armed := false
 var _special_spent := false
 var _special_progress := 0
@@ -315,6 +320,8 @@ func _on_team(msg: Dictionary) -> void:
 	_hud.set_stands_mode(false, _my_team)
 
 	if is_alive:
+		_possessing_id = 0
+		_ridden_id = 0
 		var sx: float = float(msg.get("spawn_x", 0.0))
 		var sy: float = float(msg.get("spawn_y", 0.0))
 		var sz: float = float(msg.get("spawn_z", 0.0))
@@ -346,6 +353,8 @@ func _on_team_denied(msg: Dictionary) -> void:
 func _enter_stands() -> void:
 	_in_stands = true
 	_alive = false
+	_possessing_id = 0
+	_ridden_id = 0
 	if _local_ragdoll:
 		_local_ragdoll.end()
 		_local_ragdoll = null
@@ -586,11 +595,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_spectator.leave_death_for_teammate(-1, _remotes, _my_team)
 
 
-## Ask for the body of the bot the death camera is riding. Nothing is predicted:
-## two dead players can press this on the same bot in the same frame, and the
-## server hands it to whichever request lands first. A refusal arrives as
-## silence, with the answer on screen a moment later — the body either keeps
-## being a bot, or wears the name of whoever got there first.
+## Ask to possess the bot the death camera is riding. The bot stays on the
+## board; we just drive it. Two riders cannot share a body — the first request
+## that lands keeps it, the second is refused in silence.
 func _try_takeover() -> void:
 	if _match_over or _outro_active or client == null:
 		return
@@ -601,6 +608,19 @@ func _try_takeover() -> void:
 	if not is_instance_valid(rp) or not rp.is_bot or not rp.alive or rp.team != _my_team:
 		return
 	client.send_takeover(tid)
+
+
+func _is_my_combat(pid: int) -> bool:
+	var my_id := client.my_id if client else 0
+	return pid != 0 and (pid == my_id or pid == _possessing_id)
+
+
+func _should_hide_ridden(pid: int) -> bool:
+	if pid == 0:
+		return false
+	if pid == _possessing_id:
+		return true
+	return pid == _ridden_id and (_alive or _local_ragdoll != null)
 
 
 # ── Combat events from local weapons ────────────────────────────────────
@@ -722,21 +742,41 @@ func _on_snap(snap: Dictionary) -> void:
 		p["grounded"] = p_grounded
 
 		if pid == my_id:
-			if p_special_armed and _special_spent:
-				p_special_armed = false
-			elif not p_special_armed:
-				_special_spent = false
-			_special_armed = p_special_armed
-			_special_progress = int(p.get("special_progress", _special_progress))
-			if pawn and not pawn.weapon.is_special_charging():
-				pawn.weapon.special_armed = p_special_armed
-			if not _in_stands:
-				_hud.update_hp(int(p.get("hp", 100)))
-				_sync_special_hud()
+			if _possessing_id == 0:
+				if p_special_armed and _special_spent:
+					p_special_armed = false
+				elif not p_special_armed:
+					_special_spent = false
+				_special_armed = p_special_armed
+				_special_progress = int(p.get("special_progress", _special_progress))
+				if pawn and not pawn.weapon.is_special_charging():
+					pawn.weapon.special_armed = p_special_armed
+				if not _in_stands:
+					_hud.update_hp(int(p.get("hp", 100)))
+					_sync_special_hud()
+			continue
+
+		if _should_hide_ridden(pid):
+			if _possessing_id == pid:
+				if p_special_armed and _special_spent:
+					p_special_armed = false
+				elif not p_special_armed:
+					_special_spent = false
+				_special_armed = p_special_armed
+				_special_progress = int(p.get("special_progress", _special_progress))
+				if pawn and not pawn.weapon.is_special_charging():
+					pawn.weapon.special_armed = p_special_armed
+				if not _in_stands:
+					_hud.update_hp(int(p.get("hp", 100)))
+					_sync_special_hud()
+			if _remotes.has(pid):
+				_remotes[pid].visible = false
+				_remotes[pid].set_body_visible(false)
 			continue
 
 		if _remotes.has(pid):
 			var rp: RemotePawn = _remotes[pid]
+			rp.visible = true
 			var p_team := int(p.get("team", 0))
 			if p_team != rp.team:
 				rp.set_team_value(p_team)
@@ -785,16 +825,17 @@ func _on_hit(msg: Dictionary) -> void:
 	if not target_name.is_empty():
 		_player_names[target_id] = target_name
 
-	var my_id := client.my_id if client else 0
 	if killed:
 		_hud.show_kill(
 			by_name, target_name, cause, head,
 			int(msg.get("by_team", 0)), int(msg.get("target_team", 0)),
-			by_id == my_id or target_id == my_id)
+			_is_my_combat(by_id) or _is_my_combat(target_id))
 		_last_death[target_id] = { "by": by_id, "head": head, "cause": cause }
-	if target_id == my_id:
+	if _is_my_combat(target_id):
 		_hud.update_hp(int(msg.get("hp", 0)))
 		if killed:
+			if target_id == _possessing_id:
+				_possessing_id = 0
 			_alive = false
 			_special_armed = false
 			_special_spent = false
@@ -833,8 +874,7 @@ func _on_hit(msg: Dictionary) -> void:
 
 func _on_tracer(msg: Dictionary) -> void:
 	var by_id := int(msg.get("by_id", 0))
-	var my_id := client.my_id if client else 0
-	if by_id == my_id:
+	if _is_my_combat(by_id):
 		return
 
 	var origin := Vector3(float(msg.get("origin_x", 0.0)), float(msg.get("origin_y", 0.0)), float(msg.get("origin_z", 0.0)))
@@ -901,6 +941,13 @@ func _on_respawn(msg: Dictionary) -> void:
 	var pid := int(msg.get("id", 0))
 	var my_id := client.my_id if client else 0
 	if pid == my_id:
+		var body_id := int(msg.get("body_id", pid))
+		if body_id != 0 and body_id != my_id:
+			_possessing_id = body_id
+			_ridden_id = body_id
+		else:
+			_possessing_id = 0
+			_ridden_id = 0
 		var sx := float(msg.get("x", 0.0))
 		var sy := float(msg.get("y", 0.0))
 		var sz := float(msg.get("z", 0.0))
@@ -935,9 +982,8 @@ func _on_chat_cancel() -> void:
 func _on_special(msg: Dictionary) -> void:
 	var by_id := int(msg.get("by_id", 0))
 	var phase := int(msg.get("phase", 0))
-	var my_id := client.my_id if client else 0
 
-	if phase == Protocol.SP_READY and by_id == my_id and not _special_spent:
+	if phase == Protocol.SP_READY and _is_my_combat(by_id) and not _special_spent:
 		_special_armed = true
 		_special_progress = 0
 		if pawn:
@@ -948,7 +994,7 @@ func _on_special(msg: Dictionary) -> void:
 				"HOLD %s TO CHARGE" % _special_key_label())
 		return
 
-	if by_id != my_id and _remotes.has(by_id):
+	if not _is_my_combat(by_id) and _remotes.has(by_id):
 		var rp: RemotePawn = _remotes[by_id]
 		if phase == Protocol.SP_CHARGE:
 			rp.begin_special()
@@ -957,7 +1003,7 @@ func _on_special(msg: Dictionary) -> void:
 		elif phase == Protocol.SP_END:
 			rp.end_special()
 
-	if phase == Protocol.SP_FIRE and by_id != my_id:
+	if phase == Protocol.SP_FIRE and not _is_my_combat(by_id):
 		var from := Vector3(float(msg.get("from_x", 0.0)), float(msg.get("from_y", 0.0)), float(msg.get("from_z", 0.0)))
 		var hit := Vector3(float(msg.get("hit_x", 0.0)), float(msg.get("hit_y", 0.0)), float(msg.get("hit_z", 0.0)))
 		var team_val := int(msg.get("team", 1))
@@ -967,8 +1013,7 @@ func _on_special(msg: Dictionary) -> void:
 
 
 func _on_announce(msg: Dictionary) -> void:
-	var my_id := client.my_id if client else 0
-	if int(msg.get("by_id", 0)) == my_id and msg.has("special_progress"):
+	if _is_my_combat(int(msg.get("by_id", 0))) and msg.has("special_progress"):
 		_special_progress = int(msg.get("special_progress", _special_progress))
 		_sync_special_hud()
 	if Announcer:

@@ -197,6 +197,7 @@ func remove(peer_id: int) -> void:
 		return
 	var p: Participant = participants[peer_id]
 	_sys_chat("%s left." % p.display_name)
+	_release_possession(peer_id)
 	_kill_pawn(peer_id, Protocol.CAUSE_VOID, 0, true)
 	participants.erase(peer_id)
 	pawns.erase(peer_id)
@@ -245,6 +246,7 @@ func handle_set_team(peer_id: int, new_team: int) -> void:
 				return
 
 	if old_team == Protocol.TEAM_BLUE or old_team == Protocol.TEAM_RED:
+		_release_possession(peer_id)
 		_kill_pawn(peer_id, Protocol.CAUSE_VOID, 0, true)
 		_team_switch_cooldowns[peer_id] = _now * 1000.0 + TEAM_SWITCH_COOLDOWN_MS
 
@@ -270,14 +272,10 @@ func handle_set_team(peer_id: int, new_team: int) -> void:
 	_roster_dirty = true
 
 
-## A dead player inherits the body of a bot on their own side: the pawn keeps
-## its place, health and protection, and the human's participant takes it over.
-## The bot itself is gone — its brain lives in its participant, so erasing that
-## is what stops it thinking, and it is also what settles a race between two
-## dead players. Whoever's request lands first finds a bot; the second finds
-## nothing to take. Attribution needs no extra plumbing after that: the body
-## belongs to the player's participant, so the kill feed, the roster and the
-## scoreboard all read their name from here on.
+## Daemon possession: a dead player rides a living bot on their side. The bot
+## stays on the roster and the scoreboard; the human stays on theirs. Input
+## moves the bot's body, and frags land on the bot. Two riders cannot share
+## one body — the second request finds it already possessed.
 func handle_takeover(peer_id: int, bot_id: int) -> bool:
 	if not participants.has(peer_id) or not participants.has(bot_id):
 		return false
@@ -294,40 +292,71 @@ func handle_takeover(peer_id: int, bot_id: int) -> bool:
 	var bot: Participant = participants[bot_id]
 	if not bot.is_bot or bot.team != p.team:
 		return false
+	if bot.possessed_by != 0 and bot.possessed_by != peer_id:
+		return false
 	var bot_pawn: ServerPawn = pawns.get(bot_id)
 	if bot_pawn == null or not bot_pawn.alive:
 		return false
 
-	var bot_name := bot.display_name
-	bot_pawn.participant_id = peer_id
-	# Whatever the dead body had queued in deathmatch is void now.
-	bot_pawn.respawn_at = 0.0
-	pawns[peer_id] = bot_pawn
-	pawns.erase(bot_id)
-	participants.erase(bot_id)
+	_bind_possession(peer_id, bot_id)
 
 	event_to_peer.emit(peer_id, Protocol.CH_EVENTS, Protocol.encode_respawn(
 		peer_id, bot_pawn.position.x, bot_pawn.position.y, bot_pawn.position.z,
-		bot_pawn.yaw, false, bot_pawn.hp))
-	_sys_chat("%s took over %s." % [p.display_name, bot_name])
+		bot_pawn.yaw, false, bot_pawn.hp, bot_id))
+	_sys_chat("%s possessed %s." % [p.display_name, bot.display_name])
 	_roster_dirty = true
-
-	# An arena round is an elimination, so the replacement bot must not walk on
-	# mid-round: the side would be a body up on the one it started with. Round
-	# start rebalances. Deathmatch has no such moment, so it refills now.
-	if mode == "dm":
-		_manage_bots()
-
 	return true
+
+
+func _control_id(peer_id: int) -> int:
+	if not participants.has(peer_id):
+		return peer_id
+	var p: Participant = participants[peer_id]
+	if p.possessing != 0 and participants.has(p.possessing) and pawns.has(p.possessing):
+		var body: ServerPawn = pawns[p.possessing]
+		if body != null and body.alive:
+			return p.possessing
+	return peer_id
+
+
+func _bind_possession(peer_id: int, bot_id: int) -> void:
+	_release_possession(peer_id)
+	if not participants.has(peer_id) or not participants.has(bot_id):
+		return
+	var p: Participant = participants[peer_id]
+	var bot: Participant = participants[bot_id]
+	p.possessing = bot_id
+	bot.possessed_by = peer_id
+
+
+func _release_possession(peer_id: int) -> void:
+	if not participants.has(peer_id):
+		return
+	var p: Participant = participants[peer_id]
+	if p.possessing != 0:
+		var bot_id := p.possessing
+		p.possessing = 0
+		if participants.has(bot_id):
+			var bot: Participant = participants[bot_id]
+			if bot.possessed_by == peer_id:
+				bot.possessed_by = 0
+	if p.possessed_by != 0:
+		var rider := p.possessed_by
+		p.possessed_by = 0
+		if participants.has(rider):
+			var human: Participant = participants[rider]
+			if human.possessing == peer_id:
+				human.possessing = 0
 
 
 # ── State updates from client ────────────────────────────────────────────
 
 func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched: bool,
 		grounded: bool) -> void:
-	if not pawns.has(peer_id):
+	var body_id := _control_id(peer_id)
+	if not pawns.has(body_id):
 		return
-	var pawn: ServerPawn = pawns[peer_id]
+	var pawn: ServerPawn = pawns[body_id]
 	if not pawn.alive:
 		return
 	pawn.position = pos
@@ -342,10 +371,11 @@ func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched
 func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> void:
 	if _round_frozen():
 		return
-	if not participants.has(peer_id) or not pawns.has(peer_id):
+	var body_id := _control_id(peer_id)
+	if not participants.has(body_id) or not pawns.has(body_id):
 		return
-	var shooter: Participant = participants[peer_id]
-	var shooter_pawn: ServerPawn = pawns[peer_id]
+	var shooter: Participant = participants[body_id]
+	var shooter_pawn: ServerPawn = pawns[body_id]
 	if not shooter_pawn.alive:
 		return
 	if shooter.special_at > 0.0:
@@ -357,7 +387,7 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 
 	var team_u8 := Protocol.TEAM_BLUE if shooter.team == Protocol.TEAM_BLUE else Protocol.TEAM_RED
 	event_broadcast.emit(Protocol.CH_EVENTS,
-		Protocol.encode_tracer(peer_id, origin.x, origin.y, origin.z,
+		Protocol.encode_tracer(body_id, origin.x, origin.y, origin.z,
 			aim.x, aim.y, aim.z, team_u8), peer_id)
 
 	# Nearest wall or cover occludes anything past it, so a player behind
@@ -367,7 +397,7 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 	var best_head := false
 
 	for pid: int in participants:
-		if pid == peer_id:
+		if pid == peer_id or pid == body_id:
 			continue
 		var target: Participant = participants[pid]
 		if target.team == shooter.team or target.team == Protocol.TEAM_NONE:
@@ -381,7 +411,7 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 			continue
 
 		var pose: Dictionary
-		if target.is_bot:
+		if target.is_bot and target.possessed_by == 0:
 			pose = {"x": target_pawn.position.x, "y": target_pawn.position.y,
 					"z": target_pawn.position.z, "cr": target_pawn.crouched}
 		else:
@@ -397,16 +427,17 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 
 	if best_id != 0:
 		var damage := DAMAGE_HEAD if best_head else DAMAGE_BODY
-		_apply_damage(best_id, peer_id, damage, best_head, Protocol.CAUSE_LASER)
+		_apply_damage(best_id, body_id, damage, best_head, Protocol.CAUSE_LASER)
 
 
 func handle_melee(peer_id: int, lag_ms: int) -> void:
 	if _round_frozen():
 		return
-	if not participants.has(peer_id) or not pawns.has(peer_id):
+	var body_id := _control_id(peer_id)
+	if not participants.has(body_id) or not pawns.has(body_id):
 		return
-	var shooter: Participant = participants[peer_id]
-	var pawn: ServerPawn = pawns[peer_id]
+	var shooter: Participant = participants[body_id]
+	var pawn: ServerPawn = pawns[body_id]
 	if not pawn.alive:
 		return
 
@@ -414,7 +445,7 @@ func handle_melee(peer_id: int, lag_ms: int) -> void:
 	var fwd := _yaw_dir(pawn.yaw)
 
 	for pid: int in participants:
-		if pid == peer_id:
+		if pid == peer_id or pid == body_id:
 			continue
 		var target: Participant = participants[pid]
 		if target.team == shooter.team or target.team == Protocol.TEAM_NONE:
@@ -434,38 +465,40 @@ func handle_melee(peer_id: int, lag_ms: int) -> void:
 			if angle > MELEE_ARC:
 				continue
 
-		_apply_damage(pid, peer_id, MELEE_DAMAGE, false, Protocol.CAUSE_MELEE)
+		_apply_damage(pid, body_id, MELEE_DAMAGE, false, Protocol.CAUSE_MELEE)
 		break
 
 
 func handle_special_start(peer_id: int) -> void:
 	if _round_frozen():
 		return
-	if not participants.has(peer_id) or not pawns.has(peer_id):
+	var body_id := _control_id(peer_id)
+	if not participants.has(body_id) or not pawns.has(body_id):
 		return
-	var p: Participant = participants[peer_id]
+	var p: Participant = participants[body_id]
 	if not p.special_armed or p.special_at > 0.0:
 		return
-	var pawn: ServerPawn = pawns[peer_id]
+	var pawn: ServerPawn = pawns[body_id]
 	if not pawn.alive:
 		return
 
 	p.special_at = _now
 	p.special_release = false
 	event_broadcast.emit(Protocol.CH_EVENTS,
-		Protocol.encode_special(peer_id, p.team, Protocol.SP_CHARGE,
+		Protocol.encode_special(body_id, p.team, Protocol.SP_CHARGE,
 			Vector3.ZERO, Vector3.ZERO, Vector3.ZERO, 0.0, 0.0), 0)
 
 
 func handle_special_fire(peer_id: int) -> void:
-	if not participants.has(peer_id):
+	var body_id := _control_id(peer_id)
+	if not participants.has(body_id):
 		return
-	var p: Participant = participants[peer_id]
+	var p: Participant = participants[body_id]
 	if p.special_at <= 0.0:
 		return
 	p.special_release = true
 	if _now - p.special_at >= SPECIAL_MIN_WINDUP:
-		_fire_special(peer_id)
+		_fire_special(body_id)
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────
@@ -761,6 +794,7 @@ func _start_round() -> void:
 
 	# Arena redeploys the whole side at base each round, survivors included.
 	for pid: int in participants:
+		_release_possession(pid)
 		var p: Participant = participants[pid]
 		if p.team != Protocol.TEAM_BLUE and p.team != Protocol.TEAM_RED:
 			continue
@@ -871,6 +905,8 @@ func _tick_bots(dt: float) -> void:
 		var p: Participant = participants[pid]
 		if not p.is_bot:
 			continue
+		if p.possessed_by != 0:
+			continue
 		if not pawns.has(pid):
 			continue
 		var pawn: ServerPawn = pawns[pid]
@@ -966,6 +1002,8 @@ func _tick_respawns() -> void:
 		var pawn: ServerPawn = pawns[pid]
 		if pawn.alive:
 			continue
+		if participants.has(pid) and (participants[pid] as Participant).possessing != 0:
+			continue
 		if pawn.respawn_at > 0.0 and _now * 1000.0 >= pawn.respawn_at:
 			_spawn_pawn(pid)
 			if not participants[pid].is_bot:
@@ -1011,6 +1049,9 @@ func _apply_damage(target_id: int, by_id: int, damage: int, head: bool, cause: i
 
 	if by_id != 0 and by_id != target_id and participants.has(by_id):
 		_on_kill(by_id, target_id, head, cause)
+
+	if target.possessed_by != 0:
+		_release_possession(target.possessed_by)
 
 
 func _on_kill(killer_id: int, _victim_id: int, head: bool, cause: int) -> void:
@@ -1084,6 +1125,7 @@ func _spawn_pawn(pid: int, protection_ms: float = SPAWN_PROTECTION_MS) -> void:
 	var p: Participant = participants[pid]
 	if p.team == Protocol.TEAM_NONE:
 		return
+	_release_possession(pid)
 
 	var team_key := "blue" if p.team == Protocol.TEAM_BLUE else "red"
 	var fallback := [{"position": Vector3.ZERO, "yaw": 180.0 if p.team == Protocol.TEAM_BLUE else 0.0}]
@@ -1145,6 +1187,9 @@ func _manage_bots() -> void:
 			_spawn_pawn(action["id"])
 		elif action["action"] == "remove":
 			var bid: int = action["id"]
+			var bot: Participant = participants.get(bid)
+			if bot != null and bot.possessed_by != 0:
+				continue
 			_kill_pawn(bid, Protocol.CAUSE_VOID, 0, true)
 			participants.erase(bid)
 			pawns.erase(bid)

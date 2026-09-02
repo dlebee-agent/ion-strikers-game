@@ -40,7 +40,7 @@ const DESCRIPTIONS := {
 	"team_menu": "Team menu — costs a life",
 	"controls": "This controls card",
 	"spec_swap": "Overhead / first-person",
-	"action": "Take over the bot you are watching",
+	"action": "Possess the bot you are watching — frags stay on the bot",
 }
 
 var _left_col: VBoxContainer

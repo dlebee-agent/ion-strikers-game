@@ -395,7 +395,7 @@ func _build_home() -> void:
 	designer_btn.pressed.connect(_on_designer_pressed)
 	tiles.add_child(designer_btn)
 
-	var settings_btn := _make_tile("Settings", "Audio · binds")
+	var settings_btn := _make_tile("Settings", "Audio · mouse · crosshair")
 	settings_btn.pressed.connect(func() -> void: UiRoot.show("settings"))
 	tiles.add_child(settings_btn)
 

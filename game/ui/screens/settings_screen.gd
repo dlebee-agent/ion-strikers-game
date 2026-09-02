@@ -16,11 +16,20 @@ var _master_slider: HSlider
 var _sfx_slider: HSlider
 var _music_slider: HSlider
 var _sens_slider: HSlider
+var _size_slider: HSlider
+var _thick_slider: HSlider
+var _gap_slider: HSlider
+var _alpha_slider: HSlider
 var _master_val: Label
 var _sfx_val: Label
 var _music_val: Label
 var _sens_val: Label
+var _size_val: Label
+var _thick_val: Label
+var _gap_val: Label
+var _alpha_val: Label
 var _invert_check: Button
+var _color_buttons: Dictionary = {}
 var _binds_container: VBoxContainer
 
 var _listening_action: String = ""
@@ -41,6 +50,7 @@ func _ready() -> void:
 	refresh()
 	_rebuild_binds()
 	InputBinds.bindings_changed.connect(_rebuild_binds)
+	CrosshairSettings.changed.connect(_sync_crosshair_controls)
 
 
 ## Pulls every control back in line with the stored settings. Worth calling on
@@ -55,6 +65,7 @@ func refresh() -> void:
 	_sens_slider.set_value_no_signal(InputSettings.slider_value())
 	_sens_val.text = "%.2f" % InputSettings.sensitivity
 	_invert_check.set_pressed_no_signal(InputSettings.invert_y)
+	_sync_crosshair_controls()
 
 
 func is_listening() -> bool:
@@ -164,6 +175,40 @@ func _build_audio_panel() -> PanelContainer:
 	inv_m.add_child(_invert_check)
 	vv.add_child(inv_m)
 
+	var hair_k := MarginContainer.new()
+	hair_k.add_theme_constant_override("margin_top", 24)
+	hair_k.add_child(MenuLook.kicker("Crosshair"))
+	vv.add_child(hair_k)
+
+	vv.add_child(_build_crosshair_preview())
+
+	_size_slider = _slider_row(vv, "Size", "Length of each arm", CrosshairSettings.size, func(v: float) -> void:
+		CrosshairSettings.set_size(v)
+		_size_val.text = "%d" % int(v),
+		CrosshairSettings.SIZE_MIN, CrosshairSettings.SIZE_MAX, 1.0, _px_fmt)
+	_size_val = vv.get_meta("last_val")
+
+	_thick_slider = _slider_row(vv, "Thickness", "Width of each arm", CrosshairSettings.thickness, func(v: float) -> void:
+		CrosshairSettings.set_thickness(v)
+		_thick_val.text = "%d" % int(v),
+		CrosshairSettings.THICKNESS_MIN, CrosshairSettings.THICKNESS_MAX, 1.0, _px_fmt)
+	_thick_val = vv.get_meta("last_val")
+
+	_gap_slider = _slider_row(vv, "Spacing", "Gap between opposite arms", CrosshairSettings.gap, func(v: float) -> void:
+		CrosshairSettings.set_gap(v)
+		_gap_val.text = "%d" % int(v),
+		CrosshairSettings.GAP_MIN, CrosshairSettings.GAP_MAX, 1.0, _px_fmt)
+	_gap_val = vv.get_meta("last_val")
+
+	_alpha_slider = _slider_row(vv, "Opacity", "Lower is more translucent",
+		CrosshairSettings.alpha * 100.0, func(v: float) -> void:
+			CrosshairSettings.set_alpha(v / 100.0)
+			_alpha_val.text = "%d%%" % int(v),
+		CrosshairSettings.ALPHA_MIN * 100.0, CrosshairSettings.ALPHA_MAX * 100.0, 1.0, _pct_fmt)
+	_alpha_val = vv.get_meta("last_val")
+
+	_add_color_swatches(vv)
+
 	return vol
 
 
@@ -201,8 +246,106 @@ func _build_binds_panel() -> PanelContainer:
 	return binds
 
 
+func _px_fmt(value: float) -> String:
+	return "%d" % int(value)
+
+
+func _pct_fmt(value: float) -> String:
+	return "%d%%" % int(value)
+
+
+func _sync_crosshair_controls() -> void:
+	if _size_slider == null:
+		return
+	_size_slider.set_value_no_signal(CrosshairSettings.size)
+	_thick_slider.set_value_no_signal(CrosshairSettings.thickness)
+	_gap_slider.set_value_no_signal(CrosshairSettings.gap)
+	_alpha_slider.set_value_no_signal(CrosshairSettings.alpha * 100.0)
+	_size_val.text = "%d" % int(CrosshairSettings.size)
+	_thick_val.text = "%d" % int(CrosshairSettings.thickness)
+	_gap_val.text = "%d" % int(CrosshairSettings.gap)
+	_alpha_val.text = "%d%%" % int(round(CrosshairSettings.alpha * 100.0))
+	_style_color_swatches()
+
+
+func _build_crosshair_preview() -> Control:
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = Vector2(0, 108)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.016, 0.02, 0.035, 1.0)
+	bg.border_color = MenuLook.LINE
+	bg.set_border_width_all(1)
+	bg.set_corner_radius_all(4)
+	frame.add_theme_stylebox_override("panel", bg)
+	var wrap := Control.new()
+	wrap.custom_minimum_size = Vector2(0, 96)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.add_child(wrap)
+	var preview := Crosshair.new()
+	MenuLook.fill(preview)
+	wrap.add_child(preview)
+	var m := MarginContainer.new()
+	m.add_theme_constant_override("margin_top", 14)
+	m.add_child(frame)
+	return m
+
+
+func _add_color_swatches(parent: VBoxContainer) -> void:
+	var head := HBoxContainer.new()
+	var hm := MarginContainer.new()
+	hm.add_theme_constant_override("margin_top", 14)
+	hm.add_child(head)
+	parent.add_child(hm)
+	head.add_child(MenuLook.body("Color", 14, MenuLook.INK))
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	parent.add_child(row)
+
+	var group := ButtonGroup.new()
+	group.allow_unpress = false
+	for id in CrosshairSettings.COLOR_IDS:
+		var btn := Button.new()
+		btn.toggle_mode = true
+		btn.button_group = group
+		btn.custom_minimum_size = Vector2(28, 28)
+		btn.tooltip_text = id.capitalize()
+		btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		btn.set_pressed_no_signal(id == CrosshairSettings.color_id)
+		var bound := id
+		btn.pressed.connect(func() -> void: CrosshairSettings.set_color_id(bound))
+		row.add_child(btn)
+		_color_buttons[id] = btn
+	_style_color_swatches()
+	parent.add_child(MenuLook.kicker("Typical tints · opacity is separate", MenuLook.MUTE_3, 10))
+
+
+func _style_color_swatches() -> void:
+	for id in _color_buttons:
+		var btn: Button = _color_buttons[id]
+		var rgb: Color = CrosshairSettings.palette_rgb(str(id))
+		var on := str(id) == CrosshairSettings.color_id
+		btn.set_pressed_no_signal(on)
+		var n := _swatch_box(rgb, Color.WHITE if on else Color(1, 1, 1, 0.22), 2 if on else 1)
+		var h := _swatch_box(rgb, MenuLook.CY, 2)
+		btn.add_theme_stylebox_override("normal", n)
+		btn.add_theme_stylebox_override("hover", h)
+		btn.add_theme_stylebox_override("pressed", n)
+		btn.add_theme_stylebox_override("focus", n)
+
+
+func _swatch_box(bg: Color, border: Color, width: int) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg
+	s.border_color = border
+	s.set_border_width_all(width)
+	s.set_corner_radius_all(3)
+	return s
+
+
 func _slider_row(parent: VBoxContainer, label: String, hint: String, value: float,
-		on_change: Callable, min_v := 0.0, max_v := 100.0, step := 1.0) -> HSlider:
+		on_change: Callable, min_v := 0.0, max_v := 100.0, step := 1.0,
+		value_fmt: Callable = Callable()) -> HSlider:
 	var row := HBoxContainer.new()
 	var rm := MarginContainer.new()
 	rm.add_theme_constant_override("margin_top", 14)
@@ -212,7 +355,14 @@ func _slider_row(parent: VBoxContainer, label: String, hint: String, value: floa
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(l)
 	var percent := max_v == 100.0 and min_v == 0.0
-	var val := MenuLook.mono("%d%%" % int(value) if percent else "%.2f" % (value / InputSettings.SLIDER_SCALE), 12, MenuLook.CY)
+	var text := ""
+	if value_fmt.is_valid():
+		text = str(value_fmt.call(value))
+	elif percent:
+		text = "%d%%" % int(value)
+	else:
+		text = "%.2f" % (value / InputSettings.SLIDER_SCALE)
+	var val := MenuLook.mono(text, 12, MenuLook.CY)
 	row.add_child(val)
 	parent.set_meta("last_val", val)
 	var sl := HSlider.new()

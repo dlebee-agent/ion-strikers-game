@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 8
+const PROTOCOL_VERSION := 9
 
 # Why a round ended, so the overlay can say so rather than always claiming
 # the losing side was wiped out.
@@ -382,6 +382,9 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["z"] = b.get_float()
 			d["yaw"] = b.get_float()
 			d["hp"] = b.get_u8()
+			d["body_id"] = d["id"]
+			if b.get_available_bytes() >= 4:
+				d["body_id"] = b.get_32()
 		Msg.CHAT:
 			d["team_only"] = (flags & 1) != 0
 			d["sys"] = (flags & 2) != 0
@@ -794,9 +797,10 @@ const RESPAWN_FLAG_ROUND_START := 1
 
 ## Carries health because a takeover does not start one: the body arrives on
 ## whatever the bot had left, and the HUD must never read 100 first.
+## body_id is the pawn being ridden (the bot during possession, otherwise id).
 static func encode_respawn(
 		id: int, x: float, y: float, z: float, yaw: float,
-		round_start: bool = false, hp: int = 100) -> PackedByteArray:
+		round_start: bool = false, hp: int = 100, body_id: int = 0) -> PackedByteArray:
 	var b := _buf()
 	b.put_u8(Msg.RESPAWN)
 	b.put_u8(RESPAWN_FLAG_ROUND_START if round_start else 0)
@@ -806,6 +810,7 @@ static func encode_respawn(
 	b.put_float(z)
 	b.put_float(yaw)
 	b.put_u8(clampi(hp, 0, 255))
+	b.put_32(body_id if body_id != 0 else id)
 	return b.data_array
 
 

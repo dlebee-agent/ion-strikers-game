@@ -39,9 +39,12 @@ func _initialize() -> void:
 	# health rides along instead of being assumed full.
 	var hurt := Protocol.decode(Protocol.encode_respawn(4, 1.0, 2.0, 3.0, 90.0, false, 42))
 	_check(int(hurt.get("hp", -1)) == 42, "respawn carries health")
+	_check(int(hurt.get("body_id", 0)) == 4, "a plain respawn rides your own id")
 	var fresh := Protocol.decode(Protocol.encode_respawn(4, 1.0, 2.0, 3.0, 90.0, true))
 	_check(int(fresh.get("hp", -1)) == 100, "a plain respawn is full health")
 	_check(bool(fresh.get("round_start", false)), "and still reads its round-start flag")
+	var ride := Protocol.decode(Protocol.encode_respawn(4, 1.0, 2.0, 3.0, 90.0, false, 42, -3))
+	_check(int(ride.get("body_id", 0)) == -3, "possession respawn names the bot")
 
 	# Bot ids are handed out downward from -1, so the body a player asks for is
 	# signed and would come back as a huge positive number if it were not.

@@ -41,7 +41,7 @@ const BIND_LABELS: Dictionary = {
 	"fire": "Fire laser",
 	"melee": "Melee",
 	"special": "Special attack (hold)",
-	"action": "Action / take over a bot",
+	"action": "Action / possess a bot",
 	"scoreboard": "Scoreboard (hold)",
 	"controls": "Controls card",
 	"team_menu": "Team menu",

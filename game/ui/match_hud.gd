@@ -9,7 +9,7 @@ var _hp_label: Label
 var _hp_tag: Label
 var _hp_status: Label
 var _hp_fill: StyleBoxFlat
-var _crosshair: Label
+var _crosshair: Crosshair
 var _kill_feed: VBoxContainer
 var _banner: Label
 var _banner_sub: Label
@@ -263,14 +263,8 @@ func _build_combat() -> void:
 
 
 func _build_crosshair() -> void:
-	_crosshair = Label.new()
-	_crosshair.text = "+"
-	_crosshair.add_theme_font_size_override("font_size", 24)
-	_crosshair.add_theme_color_override("font_color", Color(0.6, 1.0, 1.0, 0.7))
-	_crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_crosshair.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_crosshair = Crosshair.new()
+	_crosshair.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_root.add_child(_crosshair)
 
 
@@ -458,7 +452,7 @@ func _build_controls() -> void:
 
 	_settings_btn = Button.new()
 	_settings_btn.text = "SETTINGS"
-	_settings_btn.tooltip_text = "Volume · mouse · rebind keys"
+	_settings_btn.tooltip_text = "Volume · mouse · crosshair · rebind keys"
 	_settings_btn.custom_minimum_size = Vector2(110, 36)
 	_settings_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_settings_btn.position = Vector2(-400, 16)

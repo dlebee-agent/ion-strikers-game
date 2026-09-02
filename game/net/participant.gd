@@ -14,6 +14,10 @@ var special_progress: int = 0
 var multi: int = 0
 var last_kill_at: float = 0.0
 var is_bot: bool = false
+## Daemon possession: a dead human rides this bot (`possessed_by`), and that
+## human's `possessing` points back at the bot. Kills stay on the bot's row.
+var possessing: int = 0
+var possessed_by: int = 0
 var special_armed: bool = false
 var special_at: float = 0.0
 var special_release: bool = false

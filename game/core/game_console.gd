@@ -278,6 +278,11 @@ func _register_builtins() -> void:
 	register_command("server_password", _cmd_server_password, "Set admin password for this session")
 	register_command("server_enable_cheats", _cmd_server_enable_cheats, "Toggle cheats on the server")
 	register_command("client_show_hitboxes", _cmd_client_show_hitboxes, "Show hitbox debug draw")
+	register_command("client_crosshair_size", _cmd_crosshair_size, "Crosshair arm length")
+	register_command("client_crosshair_thickness", _cmd_crosshair_thickness, "Crosshair arm width")
+	register_command("client_crosshair_spacing", _cmd_crosshair_spacing, "Gap between opposite arms")
+	register_command("client_crosshair_color", _cmd_crosshair_color, "Crosshair tint (%s)" % CrosshairSettings.color_names())
+	register_command("client_crosshair_alpha", _cmd_crosshair_alpha, "Crosshair opacity 15-100")
 
 
 func _cmd_clear(_args: PackedStringArray) -> void:
@@ -318,6 +323,66 @@ func _cmd_server_enable_cheats(args: PackedStringArray) -> void:
 		log_line("server_password is not set", COLOR_ERR)
 		return
 	client.send_set_cheats(val == 1, server_password)
+
+
+func _cmd_crosshair_size(args: PackedStringArray) -> void:
+	_cvar_float("client_crosshair_size", args,
+		CrosshairSettings.SIZE_MIN, CrosshairSettings.SIZE_MAX,
+		func(v: float) -> void: CrosshairSettings.set_size(v),
+		func() -> float: return CrosshairSettings.size)
+
+
+func _cmd_crosshair_thickness(args: PackedStringArray) -> void:
+	_cvar_float("client_crosshair_thickness", args,
+		CrosshairSettings.THICKNESS_MIN, CrosshairSettings.THICKNESS_MAX,
+		func(v: float) -> void: CrosshairSettings.set_thickness(v),
+		func() -> float: return CrosshairSettings.thickness)
+
+
+func _cmd_crosshair_spacing(args: PackedStringArray) -> void:
+	_cvar_float("client_crosshair_spacing", args,
+		CrosshairSettings.GAP_MIN, CrosshairSettings.GAP_MAX,
+		func(v: float) -> void: CrosshairSettings.set_gap(v),
+		func() -> float: return CrosshairSettings.gap)
+
+
+func _cmd_crosshair_alpha(args: PackedStringArray) -> void:
+	var current := int(round(CrosshairSettings.alpha * 100.0))
+	if args.is_empty():
+		log_line("client_crosshair_alpha = %d" % current)
+		return
+	if not args[0].is_valid_float():
+		log_line("usage: client_crosshair_alpha 15-100", COLOR_ERR)
+		return
+	var raw := float(args[0])
+	if raw <= 1.0:
+		raw *= 100.0
+	CrosshairSettings.set_alpha(raw / 100.0)
+	log_line("client_crosshair_alpha = %d" % int(round(CrosshairSettings.alpha * 100.0)))
+
+
+func _cmd_crosshair_color(args: PackedStringArray) -> void:
+	if args.is_empty():
+		log_line("client_crosshair_color = %s" % CrosshairSettings.color_id)
+		return
+	var id := args[0].to_lower()
+	if not CrosshairSettings.has_color(id):
+		log_line("usage: client_crosshair_color %s" % CrosshairSettings.color_names(), COLOR_ERR)
+		return
+	CrosshairSettings.set_color_id(id)
+	log_line("client_crosshair_color = %s" % CrosshairSettings.color_id)
+
+
+func _cvar_float(cmd_name: String, args: PackedStringArray,
+		min_v: float, max_v: float, setter: Callable, getter: Callable) -> void:
+	if args.is_empty():
+		log_line("%s = %d" % [cmd_name, int(getter.call())])
+		return
+	if not args[0].is_valid_float():
+		log_line("usage: %s %d-%d" % [cmd_name, int(min_v), int(max_v)], COLOR_ERR)
+		return
+	setter.call(float(args[0]))
+	log_line("%s = %d" % [cmd_name, int(getter.call())])
 
 
 func _cmd_client_show_hitboxes(args: PackedStringArray) -> void:

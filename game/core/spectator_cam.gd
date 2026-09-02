@@ -278,7 +278,7 @@ func get_panel_info(remotes: Dictionary, team: int) -> Dictionary:
 			var sub := "Teammate view \u00b7 CLICK / \u2190 \u2192 to switch"
 			var take := _takeover_label()
 			if rp.is_bot and not take.is_empty():
-				sub = "%s to take over \u00b7 CLICK / \u2190 \u2192 to switch" % take
+				sub = "%s to possess \u00b7 CLICK / \u2190 \u2192 to switch" % take
 			return {
 				"who": rp.display_name,
 				"sub": sub,

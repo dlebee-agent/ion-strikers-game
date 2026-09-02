@@ -134,7 +134,7 @@ func manage_bots(participants: Dictionary, bots_enabled: bool, max_players: int)
 				if extra <= 0:
 					break
 				var p: Participant = participants[pid]
-				if p.is_bot and p.team == team_val:
+				if p.is_bot and p.team == team_val and p.possessed_by == 0:
 					actions.append({"action": "remove", "id": pid})
 					extra -= 1
 
