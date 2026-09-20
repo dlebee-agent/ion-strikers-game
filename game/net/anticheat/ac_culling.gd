@@ -5,16 +5,19 @@ extends RefCounted
 ## on the server so a client that cannot see a player is never told where
 ## that player is.
 ##
-## Rays run from the viewer's eye to points on the target body pushed out
-## sideways by how far the two can close on each other before the snapshot
-## is on screen, and up by the height of a jump on either side. That
-## lookahead is what keeps the culling optimistic: a player peeking a corner
-## or hopping over a crate is in the snapshot before their model clears the
-## edge, so nobody pops in late. A body that
+## Rays run from the viewer's eye, and from that eye pushed sideways, to
+## points on the target body pushed sideways as well, by how far the two can
+## close on each other before the snapshot is on screen, and up by the
+## height of a jump on either side. Both ends move because a peek is not
+## symmetric: pushing a far target sideways barely bends the ray, while the
+## viewer stepping past a nearby edge opens it up. That lookahead is what
+## keeps the culling optimistic: a player peeking a corner or hopping over a
+## crate is in the snapshot before their model clears the edge, so nobody
+## pops in late. A body that
 ## was visible stays in the snapshot for HOLD_S after the last clear ray,
 ## which covers a missed sample and stops flicker at an edge.
 ##
-## Cost is one ray for a pair in plain view and eight for a hidden one, paid
+## Cost is one ray for a pair in plain view and fourteen for a hidden one, paid
 ## once per pair rather than once per direction, and no more often than the
 ## recheck intervals. Bodies within NEAR_ALWAYS are always sent, since a wall
 ## that thin should not hide the melee coming through it.
@@ -22,7 +25,7 @@ extends RefCounted
 const NEAR_ALWAYS := 4.0
 const HOLD_S := 0.3
 const RECHECK_VISIBLE_S := 0.1
-const RECHECK_HIDDEN_S := 1.0 / 15.0
+const RECHECK_HIDDEN_S := 1.0 / 20.0
 const CHEST_Y := 1.0
 ## How much higher an eye or a head can be after a jump: the apex of one.
 const JUMP_RISE := Movement.JUMP_VEL * Movement.JUMP_VEL / (2.0 * Movement.GRAVITY)
@@ -67,11 +70,11 @@ func sees(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn,
 	return clear or now - float(e["seen_at"]) < HOLD_S
 
 
-## Eight rays at most. From the eye: chest, the two sides of the body as
-## seen from the eye pushed out by the lead, head, feet, and the head as
-## high as a jump takes it. From the eye raised by a jump: chest and that
-## raised head. The sides are what a corner peek shows first and the raised
-## points what a hop over cover shows first, so those carry the lookahead.
+## Fourteen rays at most, in the order a peek is likeliest to open. From
+## the eye: chest, then chest, head and feet pushed to either side by the
+## lead, the head, the feet, and the head as high as a jump takes it. From
+## the eye pushed to either side: chest and head. From the eye raised by a
+## jump: chest and that raised head.
 func _clear(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn, lead: float) -> bool:
 	var eye := viewer.position + Vector3(0.0, Hitbox.eye_height(viewer.crouched), 0.0)
 	var t := target.position
@@ -81,13 +84,19 @@ func _clear(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn, lead:
 
 	var head_y := Hitbox.CROUCH_HEAD_Y if target.crouched else Hitbox.STAND_HEAD_Y
 	var head := t + Vector3(0.0, head_y, 0.0)
+	var feet := t + Vector3(0.0, Hitbox.STAND_FOOT_Y, 0.0)
 	var head_up := head + Vector3(0.0, JUMP_RISE, 0.0)
 	var flat := Vector3(t.x - eye.x, 0.0, t.z - eye.z)
 	var side := Vector3(-flat.z, 0.0, flat.x).normalized() if flat.length_squared() > 0.001 else Vector3.RIGHT
-	var reach := Movement.PLAYER_RADIUS + lead
-	for p: Vector3 in [chest + side * reach, chest - side * reach, head,
-			t + Vector3(0.0, Hitbox.STAND_FOOT_Y, 0.0), head_up]:
+	var reach := side * (Movement.PLAYER_RADIUS + lead)
+	for p: Vector3 in [chest + reach, chest - reach, head + reach, head - reach,
+			feet + reach, feet - reach, head, feet, head_up]:
 		if not _blocked(world, eye, p):
+			return true
+
+	var step := side * lead
+	for e: Vector3 in [eye + step, eye - step]:
+		if not _blocked(world, e, chest) or not _blocked(world, e, head):
 			return true
 
 	var eye_up := eye + Vector3(0.0, JUMP_RISE, 0.0)

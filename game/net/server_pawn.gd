@@ -29,6 +29,25 @@ func record_history(now: float) -> void:
 		_history.pop_front()
 
 
+## Horizontal speed over the last SPEED_WINDOW_S of history, for anyone who
+## has to guess where this body will be shortly.
+const SPEED_WINDOW_S := 0.1
+
+func horizontal_speed() -> float:
+	if _history.size() < 2:
+		return 0.0
+	var last: Dictionary = _history[-1]
+	var first: Dictionary = last
+	for i in range(_history.size() - 2, -1, -1):
+		first = _history[i]
+		if float(last["t"]) - float(first["t"]) >= SPEED_WINDOW_S:
+			break
+	var dt := float(last["t"]) - float(first["t"])
+	if dt <= 0.0001:
+		return 0.0
+	return Vector2(float(last["x"]) - float(first["x"]), float(last["z"]) - float(first["z"])).length() / dt
+
+
 func rewind_to(at: float) -> Dictionary:
 	if _history.is_empty():
 		return {"x": position.x, "y": position.y, "z": position.z, "cr": crouched}

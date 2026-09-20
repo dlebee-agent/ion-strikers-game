@@ -32,9 +32,12 @@ var ledger := AcViolations.new()
 ## client's interpolation delay, one snapshot interval, and the longest a
 ## hidden pair waits to be looked at again.
 const LEAD_BASE_S := 0.08 + 1.0 / 30.0 + AcVisibilityCull.RECHECK_HIDDEN_S
-## Two bodies closing on each other cover ground faster than one running;
-## less than twice, since a peek is a sidestep, not a sprint.
-const LEAD_SPEED := Movement.RUN_SPEED * 1.5
+## The least closing speed the lead assumes, so a standing start is covered:
+## more than one body running, less than two, since a peek is a sidestep.
+const LEAD_SPEED_MIN := Movement.RUN_SPEED * 1.5
+## Bunny hopping has no speed ceiling, so the lead follows what the two
+## bodies are actually doing, up to a distance where it hides nothing anyway.
+const LEAD_MAX := 12.0
 
 
 func configure(p_world: CollisionWorld) -> void:
@@ -89,7 +92,8 @@ func sees(viewer: ServerPawn, viewer_ping_ms: int, target: ServerPawn, target_pi
 		now: float) -> bool:
 	if not enabled or world == null:
 		return true
-	var lead := LEAD_SPEED * (LEAD_BASE_S + float(viewer_ping_ms + target_ping_ms) * 0.0005)
+	var closing := maxf(LEAD_SPEED_MIN, viewer.horizontal_speed() + target.horizontal_speed())
+	var lead := minf(LEAD_MAX, closing * (LEAD_BASE_S + float(viewer_ping_ms + target_ping_ms) * 0.0005))
 	return culling.sees(world, viewer, target, lead, now)
 
 
