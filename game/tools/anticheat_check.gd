@@ -29,7 +29,7 @@ func _initialize() -> void:
 
 # ── world: a floor and one wall along z at x=0 ─────────────────────────
 
-func _instance(anticheat := true, floor_half := 30.0) -> GameInstance:
+func _instance(anticheat := true, floor_half := 30.0, wall_height := 4.0) -> GameInstance:
 	var inst := GameInstance.new({
 		"map_id": "parkour", "mode": "dm", "bots": false, "kills": 999, "anticheat": anticheat,
 	})
@@ -37,7 +37,7 @@ func _instance(anticheat := true, floor_half := 30.0) -> GameInstance:
 	inst.setup_map()
 	var w := CollisionWorld.new()
 	w.add_box(AABB(Vector3(-floor_half, -1.0, -floor_half), Vector3(floor_half * 2.0, 1.0, floor_half * 2.0)))
-	w.add_box(AABB(Vector3(-0.5, 0.0, -5.0), Vector3(1.0, 3.0, 10.0)))
+	w.add_box(AABB(Vector3(-0.5, 0.0, -5.0), Vector3(1.0, wall_height, 10.0)))
 	w.build()
 	inst.world = w
 	inst.anti_cheat.configure(w)
@@ -351,8 +351,16 @@ func _culling() -> void:
 	a.alive = false
 	_ticks(inst, 5)
 	_expect("a dead receiver is told where B is", _snap_pos(inst, A, B).is_equal_approx(b.position))
-
 	inst.queue_free()
+
+	# A wall too tall to see over standing, but not after a jump: the eye
+	# rises about 1.45 m at the apex. Vertical lookahead sends B before the hop.
+	var low := _instance(true, 30.0, 2.2)
+	_player(low, A, Protocol.TEAM_BLUE, Vector3(-1.5, 0.0, 0.0))
+	var lb := _player(low, B, Protocol.TEAM_RED, Vector3(3.0, 0.0, 0.0))
+	_ticks(low, 1)
+	_expect("over a %.1f m wall B is sent for the jump to come" % 2.2, _snap_pos(low, A, B).is_equal_approx(lb.position))
+	low.queue_free()
 
 
 # ── cost ────────────────────────────────────────────────────────────────

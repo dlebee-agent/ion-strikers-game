@@ -103,7 +103,8 @@ func _init(cfg: Dictionary = {}) -> void:
 	bots_shoot = cfg.get("bots_shoot", true)
 	bots_move = cfg.get("bots_move", true)
 	bot_skill = BotSkill.normalize(str(cfg.get("bot_skill", BotSkill.DEFAULT_LEVEL)))
-	anti_cheat.enabled = bool(cfg.get("anticheat", true))
+	anti_cheat.enabled = bool(cfg.get("anticheat", true)) \
+		and not ("--no-anticheat" in OS.get_cmdline_user_args())
 	anti_cheat.kick_requested.connect(_on_anticheat_kick)
 	anti_cheat.strike.connect(_on_anticheat_strike)
 
