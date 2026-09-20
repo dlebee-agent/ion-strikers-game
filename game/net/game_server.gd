@@ -314,6 +314,9 @@ func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 	add_child(inst)
 	inst.setup_map()
 	_connect_instance(inst)
+	# The join that follows a create means this lobby, however many others
+	# the server is holding.
+	_sessions[peer_id]["created"] = inst.game_id
 	print("[server] lobby '%s' created by peer %d (mode=%s)" % [inst.game_id, peer_id, cfg["mode"]])
 
 
@@ -334,7 +337,10 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 			Protocol.encode_join_error("Protocol version mismatch."))
 		return
 
-	var inst := _registry.resolve_join_direct()
+	var created := str(session.get("created", ""))
+	var inst: GameInstance = _registry.instances.get(created) if not created.is_empty() else null
+	if inst == null:
+		inst = _registry.resolve_join_direct()
 	if inst == null:
 		_send(peer_id, Protocol.CH_HANDSHAKE,
 			Protocol.encode_join_error("No lobby available."))
