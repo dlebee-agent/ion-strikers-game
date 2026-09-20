@@ -2,6 +2,7 @@ extends Node3D
 
 const LocalPawn = preload("res://core/local_pawn.gd")
 const CameraRig = preload("res://core/camera_rig.gd")
+const WallhackEsp = preload("res://hacks/wallhack_esp.gd")
 const RemotePawn = preload("res://core/remote_pawn.gd")
 const TracerBolt = preload("res://core/tracer_bolt.gd")
 const ImpactFlash = preload("res://core/impact_flash.gd")
@@ -99,6 +100,10 @@ var _freeze_until: float = 0.0
 
 func _ready() -> void:
 	add_to_group("match_scene")
+	if "--wallhack" in OS.get_cmdline_user_args():
+		var esp := WallhackEsp.new()
+		esp.match_scene = self
+		add_child(esp)
 	AudioMix.fade_out_keep_place(400.0)
 
 	_map_id = str(init_data.get("map", "parkour"))

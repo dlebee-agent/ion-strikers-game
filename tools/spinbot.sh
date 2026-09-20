@@ -6,6 +6,13 @@
 #   tools/spinbot.sh                 start the proxy (API on 8790, ENet on 7790)
 #   tools/spinbot.sh --play          also run the game from source through the
 #                                    proxy: works on every server, local ones too
+#   tools/spinbot.sh --play --wallhack
+#                                    with the ESP overlay: boxes over every enemy
+#                                    the snapshot carries, and a count of the
+#                                    ones the server's corner culling withheld
+#   tools/spinbot.sh --play --no-anticheat
+#                                    a local New Game runs its server without
+#                                    the anti-cheat, for comparison
 #   tools/spinbot.sh --launch        also start the installed app pointed at the
 #                                    API proxy: hosted servers only (no --proxy hook)
 #   tools/spinbot.sh --spin 360      slower spin (deg/s); --spin 0 keeps real yaw
@@ -22,11 +29,13 @@ ENET_PORT=7790
 LAUNCH=0
 PLAY=0
 ARGS=()
+GAME_ARGS=()
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--launch) LAUNCH=1; shift ;;
 		--play) PLAY=1; shift ;;
+		--wallhack|--no-anticheat) GAME_ARGS+=("$1"); shift ;;
 		--api-port) API_PORT="$2"; ARGS+=("$1" "$2"); shift 2 ;;
 		--enet-port) ENET_PORT="$2"; ARGS+=("$1" "$2"); shift 2 ;;
 		*) ARGS+=("$1"); shift ;;
@@ -34,7 +43,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$PLAY" = 1 ]; then
-	godot --path "$ROOT/game" -- --proxy "127.0.0.1:$ENET_PORT" --api-url "http://127.0.0.1:$API_PORT" >/dev/null 2>&1 &
+	godot --path "$ROOT/game" -- --proxy "127.0.0.1:$ENET_PORT" --api-url "http://127.0.0.1:$API_PORT" "${GAME_ARGS[@]+"${GAME_ARGS[@]}"}" >/dev/null 2>&1 &
 	echo "[spinbot] running the game from source with --proxy 127.0.0.1:$ENET_PORT"
 fi
 

@@ -20,7 +20,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-godot --headless --path "$GAME" -- --dedicated --port "$SERVER_PORT" > "$work/server.log" 2>&1 &
+# The scripted client walks through walls to its perch, so the server it
+# proves the proxy against runs without the anti-cheat; with it, the check
+# ends in a noclip kick a few seconds in.
+godot --headless --path "$GAME" -- --dedicated --port "$SERVER_PORT" --no-anticheat > "$work/server.log" 2>&1 &
 server_pid=$!
 godot --headless --path "$GAME" --script res://tools/spin_bot.gd -- \
 	--enet-port "$PROXY_PORT" --api-port "$API_PORT" \

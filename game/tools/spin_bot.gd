@@ -21,6 +21,8 @@ extends SceneTree
 ##   --api-port N      local API proxy port (default 8790)
 ##   --enet-port N     local ENet proxy port (default 7790)
 ##   --upstream H:P    game server to relay to when no API join happened yet
+##   --override        relay to --upstream even when the client names another
+##                     server, so a local New Game lands on a dedicated one
 ##   --spin DEG_PER_S  spin rate as others see it (default 720); 0 keeps real yaw
 ##   --no-aim          forward shots untouched
 ##
@@ -40,6 +42,7 @@ var _spin_rate := 720.0
 var _aim := true
 var _upstream_host := ""
 var _upstream_port := 0
+var _override := false
 
 var _tcp: TCPServer
 var _http_conns: Array[Dictionary] = []
@@ -101,6 +104,8 @@ func _parse_args() -> void:
 				_spin_rate = float(next)
 			"--no-aim":
 				_aim = false
+			"--override":
+				_override = true
 			"--upstream":
 				var parts := next.rsplit(":", true, 1)
 				if parts.size() == 2:
@@ -256,7 +261,7 @@ func _open_session(peer: ENetPacketPeer, connect_data: int) -> void:
 	var s := Session.new()
 	s.client = peer
 	_sessions[peer.get_instance_id()] = s
-	if connect_data == Protocol.PROXY_CONNECT_DATA:
+	if connect_data == Protocol.PROXY_CONNECT_DATA and not (_override and _upstream_port > 0):
 		s.awaiting_target = true
 		print("[enet] client connected, waiting for it to name its server")
 		return
@@ -324,6 +329,8 @@ func _send_up(s: Session, channel: int, data: PackedByteArray) -> void:
 
 
 func _client_to_server(s: Session, channel: int, data: PackedByteArray) -> void:
+	if channel == Protocol.CH_BULK and not s.awaiting_target and _override:
+		return
 	if channel == Protocol.CH_BULK and s.awaiting_target:
 		s.awaiting_target = false
 		var parts := data.get_string_from_utf8().rsplit(":", true, 1)
