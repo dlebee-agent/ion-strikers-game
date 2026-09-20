@@ -17,21 +17,27 @@ extends RefCounted
 ## was visible stays in the snapshot for HOLD_S after the last clear ray,
 ## which covers a missed sample and stops flicker at an edge.
 ##
-## Cost is one ray for a pair in plain view and fourteen for a hidden one, paid
-## once per pair rather than once per direction, and no more often than the
-## recheck intervals. Bodies within NEAR_ALWAYS are always sent, since a wall
-## that thin should not hide the melee coming through it.
+## Cost is one ray for a pair in plain view and eighteen for a hidden one,
+## paid once per pair rather than once per direction, and no more often than
+## the recheck intervals. A viewer right next to whatever blocks the view is
+## the case where a sidestep swings the line furthest, so those pairs are
+## looked at again every tick. Bodies within NEAR_ALWAYS are always sent,
+## since a wall that thin should not hide the melee coming through it.
 
 const NEAR_ALWAYS := 4.0
 const HOLD_S := 0.3
 const RECHECK_VISIBLE_S := 0.1
 const RECHECK_HIDDEN_S := 1.0 / 20.0
+## A hidden pair whose viewer is within NEAR_EDGE of the blocking surface.
+const RECHECK_NEAR_S := 1.0 / 60.0
+const NEAR_EDGE := 2.0
 const CHEST_Y := 1.0
 ## How much higher an eye or a head can be after a jump: the apex of one.
 const JUMP_RISE := Movement.JUMP_VEL * Movement.JUMP_VEL / (2.0 * Movement.GRAVITY)
 
 var _trace := TraceResult.new()
-var _pairs: Dictionary = {}   # "lo:hi" → {visible, checked_at, seen_at}
+var _pairs: Dictionary = {}   # "lo:hi" → {visible, checked_at, seen_at, near}
+var _near_edge := false
 
 
 func forget(id: int) -> void:
@@ -54,33 +60,41 @@ func sees(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn,
 	var key := "%d:%d" % [a, b]
 	var e: Dictionary = _pairs.get(key, {})
 	if not e.is_empty():
-		var wait: float = RECHECK_VISIBLE_S if bool(e["visible"]) else RECHECK_HIDDEN_S
+		var wait := RECHECK_HIDDEN_S
+		if bool(e["visible"]):
+			wait = RECHECK_VISIBLE_S
+		elif bool(e["near"]):
+			wait = RECHECK_NEAR_S
 		if now - float(e["checked_at"]) < wait:
 			return bool(e["visible"]) or now - float(e["seen_at"]) < HOLD_S
 
+	_near_edge = false
 	var clear := viewer.position.distance_to(target.position) <= NEAR_ALWAYS \
 		or _clear(world, viewer, target, lead)
 	if e.is_empty():
-		e = {"visible": clear, "checked_at": now, "seen_at": -INF}
+		e = {"visible": clear, "checked_at": now, "seen_at": -INF, "near": false}
 		_pairs[key] = e
 	e["visible"] = clear
+	e["near"] = _near_edge
 	e["checked_at"] = now
 	if clear:
 		e["seen_at"] = now
 	return clear or now - float(e["seen_at"]) < HOLD_S
 
 
-## Fourteen rays at most, in the order a peek is likeliest to open. From
+## Eighteen rays at most, in the order a peek is likeliest to open. From
 ## the eye: chest, then chest, head and feet pushed to either side by the
 ## lead, the head, the feet, and the head as high as a jump takes it. From
-## the eye pushed to either side: chest and head. From the eye raised by a
-## jump: chest and that raised head.
+## the eye pushed to either side by half the lead and by the lead: chest and
+## head. From the eye raised by a jump: chest and that raised head. The half
+## step is for a viewer at an opening, where the full step lands past it.
 func _clear(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn, lead: float) -> bool:
 	var eye := viewer.position + Vector3(0.0, Hitbox.eye_height(viewer.crouched), 0.0)
 	var t := target.position
 	var chest := t + Vector3(0.0, CHEST_Y, 0.0)
 	if not _blocked(world, eye, chest):
 		return true
+	_near_edge = _trace.fraction * eye.distance_to(chest) < NEAR_EDGE
 
 	var head_y := Hitbox.CROUCH_HEAD_Y if target.crouched else Hitbox.STAND_HEAD_Y
 	var head := t + Vector3(0.0, head_y, 0.0)
@@ -95,7 +109,7 @@ func _clear(world: CollisionWorld, viewer: ServerPawn, target: ServerPawn, lead:
 			return true
 
 	var step := side * lead
-	for e: Vector3 in [eye + step, eye - step]:
+	for e: Vector3 in [eye + step * 0.5, eye - step * 0.5, eye + step, eye - step]:
 		if not _blocked(world, e, chest) or not _blocked(world, e, head):
 			return true
 
