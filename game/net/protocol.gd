@@ -8,6 +8,10 @@ const CH_BULK := 3
 const MAX_CHANNELS := 4
 const PROTOCOL_VERSION := 9
 
+## ENet connect data sent by a client started with `--proxy`: the peer will
+## name its real server on CH_BULK before anything else goes through.
+const PROXY_CONNECT_DATA := 0x5350494E
+
 # Why a round ended, so the overlay can say so rather than always claiming
 # the losing side was wiped out.
 const END_ELIMINATION := 0

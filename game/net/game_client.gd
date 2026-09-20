@@ -47,6 +47,12 @@ var rtt_ms: float = 0.0
 
 const INTERP_DELAY_MS := 80.0
 
+## `-- --proxy HOST:PORT` sends every connection through a relay instead. The
+## relay is told the real server on the bulk channel before anything else,
+## and Protocol.PROXY_CONNECT_DATA marks the peer as one that will say so.
+var _proxy_host := ""
+var _proxy_port := 0
+
 
 func connect_to_server(host: String, port: int, callsign: String) -> void:
 	_target_host = host
@@ -62,10 +68,26 @@ func connect_to_server(host: String, port: int, callsign: String) -> void:
 	server_maps = []
 	_hello_wait = 0.0
 
-	_peer = _host.connect_to_host(_target_host, _target_port, Protocol.MAX_CHANNELS)
+	_read_proxy()
+	if _proxy_port > 0:
+		_peer = _host.connect_to_host(_proxy_host, _proxy_port, Protocol.MAX_CHANNELS, Protocol.PROXY_CONNECT_DATA)
+	else:
+		_peer = _host.connect_to_host(_target_host, _target_port, Protocol.MAX_CHANNELS)
 	if _peer == null:
 		connection_failed.emit("Failed to connect to %s:%d" % [_target_host, _target_port])
 		return
+
+
+func _read_proxy() -> void:
+	_proxy_host = ""
+	_proxy_port = 0
+	var args := OS.get_cmdline_user_args()
+	for i in args.size():
+		if args[i] == "--proxy" and i + 1 < args.size():
+			var parts := args[i + 1].rsplit(":", true, 1)
+			if parts.size() == 2:
+				_proxy_host = parts[0]
+				_proxy_port = int(parts[1])
 
 
 func set_create_settings(settings: Dictionary) -> void:
@@ -191,6 +213,10 @@ func _process(dt: float) -> void:
 			# Nothing is sent yet: the server opens with a HELLO listing its
 			# maps, and the create/join goes out once that has been checked.
 			_hello_wait = HELLO_TIMEOUT_S
+			if _proxy_port > 0:
+				_peer.send(Protocol.CH_BULK,
+					("%s:%d" % [_target_host, _target_port]).to_utf8_buffer(),
+					ENetPacketPeer.FLAG_RELIABLE)
 
 		elif event_type == ENetConnection.EVENT_DISCONNECT:
 			_connected = false
