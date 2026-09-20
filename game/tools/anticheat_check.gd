@@ -353,6 +353,35 @@ func _culling() -> void:
 	_expect("a dead receiver is told where B is", _snap_pos(inst, A, B).is_equal_approx(b.position))
 	inst.queue_free()
 
+	# The viewer is the one peeking: a step past the wall's end opens the
+	# line, while pushing the far target sideways would not.
+	var peek := _instance()
+	var pa := _player(peek, A, Protocol.TEAM_BLUE, Vector3(-1.0, 0.0, 4.5))
+	var pb := _player(peek, B, Protocol.TEAM_RED, Vector3(8.0, 0.0, 0.0))
+	_ticks(peek, 1)
+	_expect("a viewer about to step past the edge is sent the enemy", _snap_pos(peek, A, B).is_equal_approx(pb.position))
+	pa.position = Vector3(-1.0, 0.0, -2.0)
+	_ticks(peek, int(AcVisibilityCull.HOLD_S / DT) + 2)
+	_expect("but not from well inside the wall's shadow", _hidden(peek, A, B))
+	peek.queue_free()
+
+	# A fast body gets a longer lead: hidden at rest where it is sent at
+	# 20 m/s, since the server's own history says where it will be.
+	var fast := _instance()
+	_player(fast, A, Protocol.TEAM_BLUE, Vector3(-5.0, 0.0, 0.0))
+	var fb := _player(fast, B, Protocol.TEAM_RED, Vector3(5.0, 0.0, 6.5))
+	_ticks(fast, 5)
+	_expect("at rest, deep enough behind the edge to be hidden", _hidden(fast, A, B))
+	# Two history samples 0.2 s apart and 4 m along z say 20 m/s; the pair
+	# cache is cleared so the next snapshot looks again at once.
+	fb.record_history(fast._now - 0.2)
+	fb.position = Vector3(5.0, 0.0, 6.5 + 20.0 * 0.2)
+	fb.record_history(fast._now)
+	fb.position = Vector3(5.0, 0.0, 6.5)
+	fast.anti_cheat.culling._pairs.clear()
+	_expect("moving at 20 m/s the same spot is sent (speed lead)", not _hidden(fast, A, B))
+	fast.queue_free()
+
 	# A wall too tall to see over standing, but not after a jump: the eye
 	# rises about 1.45 m at the apex. Vertical lookahead sends B before the hop.
 	var low := _instance(true, 30.0, 2.2)
