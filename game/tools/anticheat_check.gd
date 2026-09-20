@@ -55,6 +55,17 @@ func _instance(anticheat := true, floor_half := 30.0, wall_height := 4.0) -> Gam
 	return inst
 
 
+## Swaps the instance's world for a floor plus the given boxes.
+func _world(inst: GameInstance, boxes: Array) -> void:
+	var w := CollisionWorld.new()
+	w.add_box(AABB(Vector3(-30.0, -1.0, -30.0), Vector3(60.0, 1.0, 60.0)))
+	for box: AABB in boxes:
+		w.add_box(box)
+	w.build()
+	inst.world = w
+	inst.anti_cheat.configure(w)
+
+
 func _player(inst: GameInstance, id: int, team: int, at: Vector3) -> ServerPawn:
 	var p := Participant.new(id, "P%d" % id, false)
 	p.team = team
@@ -381,6 +392,40 @@ func _culling() -> void:
 	fast.anti_cheat.culling._pairs.clear()
 	_expect("moving at 20 m/s the same spot is sent (speed lead)", not _hidden(fast, A, B))
 	fast.queue_free()
+
+	# A viewer in front of a 0.6 m slit with the enemy dead ahead behind the
+	# wall: a full-lead sidestep lands past the slit, a half one in it.
+	var slit := _instance()
+	_world(slit, [AABB(Vector3(-0.5, 0.0, -5.0), Vector3(1.0, 4.0, 4.1)),
+		AABB(Vector3(-0.5, 0.0, -0.3), Vector3(1.0, 4.0, 5.3))])
+	_player(slit, A, Protocol.TEAM_BLUE, Vector3(-1.0, 0.0, -1.4))
+	var sb := _player(slit, B, Protocol.TEAM_RED, Vector3(8.0, 0.0, -1.4))
+	_ticks(slit, 1)
+	_expect("half a sidestep from a slit is enough to be sent the enemy", _snap_pos(slit, A, B).is_equal_approx(sb.position))
+	slit.queue_free()
+
+	# Next to the blocking wall a hidden pair is looked at again every tick;
+	# far from it, every 50 ms.
+	var near := _instance()
+	_player(near, A, Protocol.TEAM_BLUE, Vector3(-1.5, 0.0, 0.0))
+	var nb := _player(near, B, Protocol.TEAM_RED, Vector3(5.0, 0.0, 0.0))
+	_ticks(near, 1)
+	_expect("hidden with the viewer 1 m from the wall", _hidden(near, A, B))
+	nb.position = Vector3(5.0, 0.0, 12.0)
+	_ticks(near, 1)
+	_expect("one tick later the move into the open is already sent", _snap_pos(near, A, B).is_equal_approx(nb.position))
+	near.queue_free()
+	var farv := _instance()
+	_player(farv, A, Protocol.TEAM_BLUE, Vector3(-6.0, 0.0, 0.0))
+	var fbb := _player(farv, B, Protocol.TEAM_RED, Vector3(5.0, 0.0, 0.0))
+	_ticks(farv, 1)
+	_expect("hidden with the viewer 5.5 m from the wall", _hidden(farv, A, B))
+	fbb.position = Vector3(5.0, 0.0, 12.0)
+	_ticks(farv, 1)
+	_expect("one tick later it is still the cached verdict", _hidden(farv, A, B))
+	_ticks(farv, 3)
+	_expect("and sent once the 50 ms recheck comes round", _snap_pos(farv, A, B).is_equal_approx(fbb.position))
+	farv.queue_free()
 
 	# A wall too tall to see over standing, but not after a jump: the eye
 	# rises about 1.45 m at the apex. Vertical lookahead sends B before the hop.
