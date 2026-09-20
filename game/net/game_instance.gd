@@ -5,7 +5,7 @@ signal event_to_peer(peer_id: int, channel: int, data: PackedByteArray)
 signal event_broadcast(channel: int, data: PackedByteArray, exclude_id: int)
 signal event_team_broadcast(team: int, channel: int, data: PackedByteArray)
 signal peer_init(peer_id: int, data: PackedByteArray)
-signal peer_kicked(peer_id: int)
+signal peer_kicked(peer_id: int, reason: String)
 
 var game_id: String
 var display_name: String
@@ -25,6 +25,9 @@ var match_state: MatchState
 var participants: Dictionary = {}   # id → Participant
 var pawns: Dictionary = {}          # id → ServerPawn
 var bot_director: BotDirector
+## Server-side anti-cheat. Called at the hooks marked "anti-cheat hook"
+## below; see net/anticheat/anti_cheat.gd for what each decides.
+var anti_cheat := AntiCheat.new()
 var spawns: Dictionary = {}
 var world: CollisionWorld = null
 # Reused by every shot this instance traces, so firing allocates nothing.
@@ -69,6 +72,10 @@ const MELEE_DAMAGE := 50
 var _roster_dirty: bool = false
 
 const MAX_REWIND_MS := 300.0
+## Where a snapshot puts an enemy the receiver cannot see: far enough under
+## the map that the client's remote body is out of sight and earshot, and a
+## teleport for its interpolator rather than a streak.
+const HIDDEN_Y := -1000.0
 const SPAWN_PROTECTION_MS := 2000.0
 const DM_RESPAWN_MS := 5000.0
 
@@ -96,6 +103,9 @@ func _init(cfg: Dictionary = {}) -> void:
 	bots_shoot = cfg.get("bots_shoot", true)
 	bots_move = cfg.get("bots_move", true)
 	bot_skill = BotSkill.normalize(str(cfg.get("bot_skill", BotSkill.DEFAULT_LEVEL)))
+	anti_cheat.enabled = bool(cfg.get("anticheat", true))
+	anti_cheat.kick_requested.connect(_on_anticheat_kick)
+	anti_cheat.strike.connect(_on_anticheat_strike)
 
 	match_state = MatchState.new()
 	match_state.mode = mode
@@ -112,6 +122,7 @@ func setup_map() -> void:
 		_setup_builtin_map()
 	bot_director.set_skill(bot_skill)
 	bot_director.configure(world, arena_size, spawns)
+	anti_cheat.configure(world)
 
 	match_state.next_meteor_at = _now + match_state.meteor_delay()
 
@@ -201,6 +212,7 @@ func remove(peer_id: int) -> void:
 	_kill_pawn(peer_id, Protocol.CAUSE_VOID, 0, true)
 	participants.erase(peer_id)
 	pawns.erase(peer_id)
+	anti_cheat.on_leave(peer_id)
 	_manage_bots()
 	_roster_dirty = true
 	_refresh_empty_clock()
@@ -327,6 +339,10 @@ func _bind_possession(peer_id: int, bot_id: int) -> void:
 	var bot: Participant = participants[bot_id]
 	p.possessing = bot_id
 	bot.possessed_by = peer_id
+	# The rider's reports now describe the bot's body, wherever it walked to.
+	var bot_pawn: ServerPawn = pawns.get(bot_id)
+	if bot_pawn != null:
+		anti_cheat.on_spawn(bot_id, bot_pawn.position, _now)
 
 
 func _release_possession(peer_id: int) -> void:
@@ -359,6 +375,10 @@ func update_state(peer_id: int, pos: Vector3, yaw: float, pitch: float, crouched
 	var pawn: ServerPawn = pawns[body_id]
 	if not pawn.alive:
 		return
+	# Anti-cheat hook: a report the body could not have made is dropped and
+	# the pawn stays where it was last seen.
+	if not anti_cheat.check_state(peer_id, pawn, pos, _now):
+		return
 	pawn.position = pos
 	pawn.yaw = yaw
 	pawn.pitch = pitch
@@ -380,6 +400,14 @@ func handle_shot(peer_id: int, origin: Vector3, dir: Vector3, lag_ms: int) -> vo
 		return
 	if shooter.special_at > 0.0:
 		return
+
+	# Anti-cheat hook: rate, origin and rewind are the server's to decide.
+	var verdict := anti_cheat.check_shot(peer_id, shooter_pawn, origin, dir, lag_ms,
+		_peer_ping(peer_id), _now, MAX_REWIND_MS)
+	if not verdict["allow"]:
+		return
+	origin = verdict["origin"]
+	lag_ms = verdict["lag_ms"]
 
 	var rewind := clampf(float(lag_ms), 0.0, MAX_REWIND_MS) / 1000.0
 	var rewind_time := _now - rewind
@@ -529,6 +557,7 @@ func handle_chat(peer_id: int, text: String, team_only: bool) -> void:
 
 func handle_set_cheats(enabled: bool) -> void:
 	cheats = enabled
+	anti_cheat.enforce_movement = not cheats
 	var text := "Cheats enabled." if cheats else "Cheats disabled."
 	_sys_chat(text)
 	event_broadcast.emit(Protocol.CH_EVENTS, Protocol.encode_cheats(cheats), -1)
@@ -536,13 +565,32 @@ func handle_set_cheats(enabled: bool) -> void:
 
 # ── SNAP ─────────────────────────────────────────────────────────────────
 
-func build_snap() -> PackedByteArray:
+## The snapshot for one receiver. Anti-cheat hook: an enemy the receiver's
+## body cannot see is carried without a position, so the entry still counts
+## on the HUD and the scoreboard but says nothing about where they are. A
+## receiver of 0, or one without a live body, gets everything.
+func build_snap(receiver_id: int = 0) -> PackedByteArray:
 	_snap_seq += 1
 	var players: Array[Dictionary] = []
+
+	var viewer: ServerPawn = null
+	var viewer_team := Protocol.TEAM_NONE
+	var viewer_ping := 0
+	if receiver_id != 0 and anti_cheat.enabled and participants.has(receiver_id):
+		var body_id := _control_id(receiver_id)
+		var body: ServerPawn = pawns.get(body_id)
+		var body_p: Participant = participants.get(body_id)
+		if body != null and body.alive and body_p != null and body_p.team != Protocol.TEAM_NONE:
+			viewer = body
+			viewer_team = body_p.team
+			viewer_ping = (participants[receiver_id] as Participant).ping_ms
 
 	for pid: int in participants:
 		var p: Participant = participants[pid]
 		var pawn_ref: ServerPawn = pawns.get(pid)
+		var hidden := viewer != null and pawn_ref != null and pawn_ref.alive \
+			and pawn_ref != viewer and p.team != viewer_team and p.team != Protocol.TEAM_NONE \
+			and not anti_cheat.sees(viewer, viewer_ping, pawn_ref, p.ping_ms, _now)
 		var flags := 0
 		if pawn_ref != null and pawn_ref.alive:
 			flags |= Protocol.PFLG_ALIVE
@@ -562,11 +610,11 @@ func build_snap() -> PackedByteArray:
 		var entry: Dictionary = {
 			"id": pid,
 			"flags": flags,
-			"x": pawn_ref.position.x if pawn_ref else 0.0,
-			"y": pawn_ref.position.y if pawn_ref else 0.0,
-			"z": pawn_ref.position.z if pawn_ref else 0.0,
-			"yaw": pawn_ref.yaw if pawn_ref else 0.0,
-			"pitch": pawn_ref.pitch if pawn_ref else 0.0,
+			"x": pawn_ref.position.x if pawn_ref and not hidden else 0.0,
+			"y": pawn_ref.position.y if pawn_ref and not hidden else (HIDDEN_Y if hidden else 0.0),
+			"z": pawn_ref.position.z if pawn_ref and not hidden else 0.0,
+			"yaw": pawn_ref.yaw if pawn_ref and not hidden else 0.0,
+			"pitch": pawn_ref.pitch if pawn_ref and not hidden else 0.0,
 			"hp": pawn_ref.hp if pawn_ref else 0,
 			"kills": p.kills,
 			"deaths": p.deaths,
@@ -1144,6 +1192,7 @@ func _spawn_pawn(pid: int, protection_ms: float = SPAWN_PROTECTION_MS) -> void:
 	pawn.position = at + jitter
 	pawn.yaw = float(pick["yaw"])
 	pawn.hp = 100
+	anti_cheat.on_spawn(pid, pawn.position, _now)
 	pawn.alive = true
 	pawn.protected_until = _now + protection_ms / 1000.0
 	pawns[pid] = pawn
@@ -1271,6 +1320,23 @@ func _build_team_opts(peer_id: int) -> PackedByteArray:
 		_team_count(Protocol.TEAM_BLUE, true), per_team,
 		_team_count(Protocol.TEAM_RED, true), per_team,
 		_team_count(Protocol.TEAM_NONE, false), max_spectators)
+
+
+func _peer_ping(peer_id: int) -> int:
+	var p: Participant = participants.get(peer_id)
+	return p.ping_ms if p != null else 0
+
+
+func _on_anticheat_strike(peer_id: int, kind: String, count: int) -> void:
+	var p: Participant = participants.get(peer_id)
+	print("[anticheat] %s: %s (%d in window)" % [p.display_name if p else str(peer_id), kind, count])
+
+
+func _on_anticheat_kick(peer_id: int, reason: String) -> void:
+	var p: Participant = participants.get(peer_id)
+	if p != null:
+		_sys_chat("%s was removed by the anti-cheat (%s)." % [p.display_name, reason])
+	peer_kicked.emit(peer_id, reason)
 
 
 func _sys_chat(text: String) -> void:
