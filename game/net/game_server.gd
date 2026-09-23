@@ -314,6 +314,9 @@ func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 	add_child(inst)
 	inst.setup_map()
 	_connect_instance(inst)
+	# The join that follows a create means this lobby, however many others
+	# the server is holding.
+	_sessions[peer_id]["created"] = inst.game_id
 	print("[server] lobby '%s' created by peer %d (mode=%s)" % [inst.game_id, peer_id, cfg["mode"]])
 
 
@@ -334,7 +337,10 @@ func _handle_join_direct(peer_id: int, msg: Dictionary) -> void:
 			Protocol.encode_join_error("Protocol version mismatch."))
 		return
 
-	var inst := _registry.resolve_join_direct()
+	var created := str(session.get("created", ""))
+	var inst: GameInstance = _registry.instances.get(created) if not created.is_empty() else null
+	if inst == null:
+		inst = _registry.resolve_join_direct()
 	if inst == null:
 		_send(peer_id, Protocol.CH_HANDSHAKE,
 			Protocol.encode_join_error("No lobby available."))
@@ -541,12 +547,13 @@ func _broadcast_snaps() -> void:
 	for gid: String in _registry.instances:
 		var inst: GameInstance = _registry.instances[gid]
 		_refresh_pings(inst)
-		var snap := inst.build_snap()
+		# One snapshot per receiver: what each is told depends on what their
+		# body can see.
 		for pid: int in inst.participants:
 			var p: Participant = inst.participants[pid]
 			if p.is_bot:
 				continue
-			_send_raw(pid, Protocol.CH_UNRELIABLE, snap)
+			_send_raw(pid, Protocol.CH_UNRELIABLE, inst.build_snap(pid))
 
 
 func _refresh_pings(inst: GameInstance) -> void:
@@ -562,6 +569,21 @@ func _connect_instance(inst: GameInstance) -> void:
 	inst.event_to_peer.connect(_on_instance_event_to_peer)
 	inst.event_broadcast.connect(_on_instance_broadcast.bind(inst))
 	inst.event_team_broadcast.connect(_on_instance_team_broadcast.bind(inst))
+	inst.peer_kicked.connect(_on_instance_kick)
+
+
+## The anti-cheat gave up on a peer: tell them why, then drop them once
+## that has gone out. The instance side of the cleanup is the same as a
+## leave.
+func _on_instance_kick(peer_id: int, reason: String) -> void:
+	if not _sessions.has(peer_id):
+		return
+	var peer: ENetPacketPeer = _sessions[peer_id]["peer"]
+	_send(peer_id, Protocol.CH_HANDSHAKE,
+		Protocol.encode_join_error("Removed by the anti-cheat: %s." % reason))
+	print("[server] peer %d kicked by the anti-cheat (%s)" % [peer_id, reason])
+	_on_disconnect(peer_id)
+	peer.peer_disconnect_later(0)
 
 
 func _on_instance_event_to_peer(peer_id: int, channel: int, data: PackedByteArray) -> void:
