@@ -122,16 +122,36 @@ func (r *Registry) Heartbeat(srv store.ServerRecord, timestamp int64, activePeer
 	return r.store.PutGames(srv.ServerID, games, r.ttl)
 }
 
-// SelectCreateHost returns the first healthy, create-capable server with capacity.
+// AnyProtocol asks SelectCreateHost and the browse filter not to consider the
+// wire version at all. Only operators should reach for it: it is how you look at
+// every lobby on the deployment regardless of which generation serves it.
+const AnyProtocol = 0
+
+// SelectCreateHost returns the first healthy, create-capable server with capacity
+// that speaks the given wire version.
+//
 // Servers that did not advertise allow_dynamic_create are never chosen; they are
 // discoverable and joinable but do not host lobbies created through this API.
-func (r *Registry) SelectCreateHost() (store.ServerRecord, error) {
+//
+// The protocol filter is what lets two generations of server share one API and
+// one hostname. Without it, selection returned whichever record the store
+// happened to yield first — and the memory store iterates a map, so that was
+// effectively random. A client would then be handed a host it cannot speak to
+// and fail at the ENet handshake, with nothing in the API's answer hinting why.
+// Refusing here instead turns an unexplained mid-connect failure into a 503 that
+// names the reason.
+func (r *Registry) SelectCreateHost(protocolVersion int) (store.ServerRecord, error) {
 	servers, err := r.store.ListServers()
 	if err != nil {
 		return store.ServerRecord{}, err
 	}
+	sawProtocolMismatch := false
 	for _, s := range servers {
 		if !s.AllowDynamicCreate {
+			continue
+		}
+		if protocolVersion != AnyProtocol && s.ProtocolVersion != protocolVersion {
+			sawProtocolMismatch = true
 			continue
 		}
 		if s.ActiveLobbies >= s.MaxLobbies {
@@ -142,7 +162,27 @@ func (r *Registry) SelectCreateHost() (store.ServerRecord, error) {
 		}
 		return s, nil
 	}
+	// Distinguishing these matters to whoever reads the error: "your build is
+	// too old for this deployment" and "we are full" call for different actions.
+	if sawProtocolMismatch {
+		return store.ServerRecord{}, fmt.Errorf(
+			"no create-capable server speaks protocol %d", protocolVersion)
+	}
 	return store.ServerRecord{}, fmt.Errorf("no create-capable server with available capacity")
+}
+
+// ProtocolByServer maps server_id to the wire version each registered server
+// advertised, so the browse list can be filtered without a lookup per lobby.
+func (r *Registry) ProtocolByServer() (map[string]int, error) {
+	servers, err := r.store.ListServers()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(servers))
+	for _, s := range servers {
+		out[s.ServerID] = s.ProtocolVersion
+	}
+	return out, nil
 }
 
 // FindGameOwner returns the server that owns a given game_id.

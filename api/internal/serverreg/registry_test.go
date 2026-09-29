@@ -203,7 +203,7 @@ func TestDedicatedIsListedButNeverACreateHost(t *testing.T) {
 		t.Fatalf("dedicated lobby should be discoverable, got %v", games)
 	}
 
-	if _, err := reg.SelectCreateHost(); err == nil {
+	if _, err := reg.SelectCreateHost(serverreg.AnyProtocol); err == nil {
 		t.Fatal("a server that did not advertise create must not host new lobbies")
 	}
 }
@@ -224,7 +224,7 @@ func TestCreateHostPrefersCapableServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host, err := reg.SelectCreateHost()
+	host, err := reg.SelectCreateHost(serverreg.AnyProtocol)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestCreateHostSkipsServerAtLobbyLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	host, err := reg.SelectCreateHost()
+	host, err := reg.SelectCreateHost(serverreg.AnyProtocol)
 	if err != nil {
 		t.Fatal(err)
 	}

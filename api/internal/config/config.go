@@ -8,9 +8,20 @@ import (
 )
 
 type Config struct {
-	ListenAddr      string
-	HeartbeatTTL    time.Duration
-	ProtocolVersion int
+	ListenAddr   string
+	HeartbeatTTL time.Duration
+
+	// AssumedProtocolVersion is the wire version attributed to a client that
+	// does not state one. Clients only began sending protocol_version when
+	// protocol 10 shipped, so every request without it comes from a build on
+	// the last version that predates the field.
+	//
+	// Getting this wrong is worse than it looks. Treating "absent" as "match
+	// anything" would put an old client on whichever host the registry happened
+	// to return first, which is the coin flip this filtering exists to remove.
+	// So the default is a real version, not a wildcard, and it is configurable
+	// because the right answer changes as old builds age out.
+	AssumedProtocolVersion int
 
 	// How far a signed message's timestamp may drift from our clock before it
 	// is rejected. Guards replay without demanding tight clock sync.
@@ -27,9 +38,12 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		ListenAddr:      envOr("LISTEN_ADDR", ":8080"),
-		HeartbeatTTL:    envDuration("HEARTBEAT_TTL", 30*time.Second),
-		ProtocolVersion: envInt("PROTOCOL_VERSION", 1),
+		ListenAddr:   envOr("LISTEN_ADDR", ":8080"),
+		HeartbeatTTL: envDuration("HEARTBEAT_TTL", 30*time.Second),
+		// PROTOCOL_VERSION is the older name for this and is still honoured, so
+		// an existing environment file keeps working.
+		AssumedProtocolVersion: envInt("ASSUMED_PROTOCOL_VERSION",
+			envInt("PROTOCOL_VERSION", 9)),
 		MaxClockSkew:    envDuration("MAX_CLOCK_SKEW", 60*time.Second),
 		JoinTokenSecret: envOr("JOIN_TOKEN_SECRET", "dev-join-secret"),
 		Store:           envOr("STORE", "memory"),

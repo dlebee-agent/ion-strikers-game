@@ -33,7 +33,7 @@ func init() {
 func setup(t *testing.T) *httptest.Server {
 	t.Helper()
 	reg := serverreg.New(store.NewMemoryStore(), 30*time.Second, 60*time.Second)
-	api := httpapi.New(reg, joinSecret)
+	api := httpapi.New(reg, joinSecret, 1)
 	ts := httptest.NewServer(api.Mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -42,10 +42,10 @@ func setup(t *testing.T) *httptest.Server {
 // fakeGameServer speaks the JSON-lines management protocol the real Godot
 // server implements, verifying that commands are signed by the API.
 type fakeGameServer struct {
-	listener       net.Listener
-	apiPublicKey   *rsa.PublicKey
-	allowCreate    bool
-	createdGameID  string
+	listener        net.Listener
+	apiPublicKey    *rsa.PublicKey
+	allowCreate     bool
+	createdGameID   string
 	sawBadSignature bool
 }
 
