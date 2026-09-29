@@ -1442,6 +1442,21 @@ func _connect_hosted(info: Dictionary) -> void:
 		launch_note.text = "Game API returned no join token."
 		result_line.text = launch_note.text
 		return
+
+	# The API picks a host that speaks our protocol and states which version that
+	# host is on. Checking the echo costs nothing and turns one specific
+	# confusion into a sentence: an API too old to filter will happily hand a
+	# protocol-10 client a protocol-9 host, and without this the only symptom is
+	# the connection dying at the handshake for reasons the menu cannot explain.
+	# A zero or missing value means an API that predates the field, which is not
+	# an error in itself — it simply has nothing to check.
+	var host_protocol := int(info.get("protocol_version", 0))
+	if host_protocol != 0 and host_protocol != Protocol.PROTOCOL_VERSION:
+		_connecting = false
+		launch_note.text = "That server runs protocol %d; this build speaks %d. Update the game." % [
+			host_protocol, Protocol.PROTOCOL_VERSION]
+		result_line.text = launch_note.text
+		return
 	_game_client = GameClient.new()
 	_game_client.set_join_auth(token)
 	add_child(_game_client)
