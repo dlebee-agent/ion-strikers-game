@@ -6,7 +6,7 @@ const CH_HANDSHAKE := 1
 const CH_EVENTS := 2
 const CH_BULK := 3
 const MAX_CHANNELS := 4
-const PROTOCOL_VERSION := 9
+const PROTOCOL_VERSION := 10
 
 # Why a round ended, so the overlay can say so rather than always claiming
 # the losing side was wiped out.
@@ -76,7 +76,24 @@ enum Msg {
 	JOIN_AUTH,
 	HELLO,
 	TAKEOVER,
+	VOICE,
+	VOICE_DATA,
 }
+
+## Set on VOICE_DATA when the speaker was not alive as they spoke, so the
+## indicator can mark them the way Counter-Strike does. Only a listener who
+## is allowed to hear the dead ever receives one of these.
+const VFLG_SPEAKER_DEAD := 1
+
+## One voice frame is 20 ms of 8 kHz mono, which is 160 samples. ADPCM packs
+## those into 4 bits each, so the payload is a fixed 80 bytes plus a four byte
+## codec header — about 4.3 KB/s while a player holds the key down.
+const VOICE_SAMPLE_RATE := 8000
+const VOICE_FRAME_SAMPLES := 160
+## Hard ceiling on a voice payload the server will relay. A frame is 84 bytes;
+## anything near this is malformed or hostile, and the length is attacker
+## controlled, so it is bounded before the bytes are ever forwarded.
+const VOICE_MAX_PAYLOAD := 512
 
 enum Team { TEAM_NONE = 0, TEAM_BLUE = 1, TEAM_RED = 2 }
 enum Cause { CAUSE_LASER = 0, CAUSE_MELEE = 1, CAUSE_SPECIAL = 2, CAUSE_METEOR = 3, CAUSE_VOID = 4 }
@@ -130,6 +147,11 @@ static func channel_for(t: int) -> int:
 			return CH_UNRELIABLE
 		Msg.HIT, Msg.TRACER, Msg.ROUND_START, Msg.ROUND_END, Msg.MATCH_OVER, Msg.RESPAWN, Msg.CHAT, Msg.SPECIAL, Msg.ANNOUNCE, Msg.METEOR, Msg.ROSTER, Msg.CHEATS:
 			return CH_EVENTS
+		# Voice gets the channel to itself so a talkative lobby cannot delay a
+		# hit or a round start, and so it can be lossy while events stay
+		# reliable. ENet keeps each channel's ordering separate.
+		Msg.VOICE, Msg.VOICE_DATA:
+			return CH_BULK
 		_:
 			return CH_HANDSHAKE
 
@@ -286,6 +308,21 @@ static func _decode_body(b: StreamPeerBuffer, t: int, flags: int) -> Dictionary:
 			d["team"] = b.get_u8()
 		Msg.TAKEOVER:
 			d["target_id"] = b.get_32()
+		# The length is whatever the sender claimed, so it is clamped to what is
+		# actually left in the buffer before the read. Handing get_data a size
+		# past the end yields zero bytes that would decode as a click.
+		Msg.VOICE:
+			var vlen := b.get_u16()
+			vlen = mini(vlen, b.get_available_bytes())
+			d["audio"] = b.get_data(vlen)[1] if vlen > 0 else PackedByteArray()
+		Msg.VOICE_DATA:
+			d["speaker_dead"] = (flags & VFLG_SPEAKER_DEAD) != 0
+			d["speaker_id"] = b.get_32()
+			d["team"] = b.get_u8()
+			d["seq"] = b.get_u16()
+			var dlen := b.get_u16()
+			dlen = mini(dlen, b.get_available_bytes())
+			d["audio"] = b.get_data(dlen)[1] if dlen > 0 else PackedByteArray()
 		Msg.TEAM_MENU:
 			pass
 		Msg.TEAM_OPTS:
@@ -608,6 +645,36 @@ static func encode_takeover(target_id: int) -> PackedByteArray:
 	b.put_u8(Msg.TAKEOVER)
 	b.put_u8(0)
 	b.put_32(target_id)
+	return b.data_array
+
+
+## A client's own microphone, one frame per message. The server decides who
+## hears it; the sender never says who it is for.
+static func encode_voice(audio: PackedByteArray) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.VOICE)
+	b.put_u8(0)
+	b.put_u16(audio.size())
+	if audio.size() > 0:
+		b.put_data(audio)
+	return b.data_array
+
+
+## One speaker's frame on its way to one listener. seq lets the receiver drop a
+## frame that arrives behind one it has already played, which is the only
+## ordering guarantee voice needs.
+static func encode_voice_data(
+		speaker_id: int, team: int, seq: int,
+		audio: PackedByteArray, speaker_dead: bool) -> PackedByteArray:
+	var b := _buf()
+	b.put_u8(Msg.VOICE_DATA)
+	b.put_u8(VFLG_SPEAKER_DEAD if speaker_dead else 0)
+	b.put_32(speaker_id)
+	b.put_u8(team)
+	b.put_u16(seq & 0xFFFF)
+	b.put_u16(audio.size())
+	if audio.size() > 0:
+		b.put_data(audio)
 	return b.data_array
 
 

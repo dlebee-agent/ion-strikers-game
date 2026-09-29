@@ -19,6 +19,7 @@ const BIND_DEFAULTS: Dictionary = {
 	"team_menu": ["M", ""],
 	"chat_all": ["Y", ""],
 	"chat_team": ["U", ""],
+	"voice": ["K", ""],
 	"spec_swap": ["V", ""],
 	"console": ["`", ""],
 }
@@ -26,7 +27,7 @@ const BIND_DEFAULTS: Dictionary = {
 const BIND_GROUPS: Array = [
 	["Movement", ["forward", "back", "left", "right", "jump", "crouch", "walk"]],
 	["Combat", ["fire", "melee", "special", "action"]],
-	["Communication", ["chat_all", "chat_team"]],
+	["Communication", ["chat_all", "chat_team", "voice"]],
 	["Interface", ["team_menu", "scoreboard", "controls", "spec_swap", "console"]],
 ]
 
@@ -47,6 +48,7 @@ const BIND_LABELS: Dictionary = {
 	"team_menu": "Team menu",
 	"chat_all": "Global message",
 	"chat_team": "Team chat",
+	"voice": "Voice (hold to talk)",
 	"spec_swap": "Toggle spectate mode",
 	"console": "Developer console",
 }
@@ -109,6 +111,16 @@ func _load_saved() -> void:
 		for other: String in bindings:
 			if other != "action" and not wanted.is_empty() and (bindings[other] as Array).has(wanted):
 				bindings["action"][0] = ""
+				save_bindings()
+				break
+	# Same for "voice", which is newer still. K is Counter-Strike's default
+	# voice key, so it is the right default here, but a returning player may
+	# already have K on something else.
+	if not cfg.has_section_key("binds", "voice_primary"):
+		var voice_key: String = bindings["voice"][0]
+		for other: String in bindings:
+			if other != "voice" and not voice_key.is_empty() and (bindings[other] as Array).has(voice_key):
+				bindings["voice"][0] = ""
 				save_bindings()
 				break
 
