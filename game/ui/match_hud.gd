@@ -30,6 +30,9 @@ var _spec_streak := 0
 var _spec_glow_t := 0.0
 var _spec_last_filled := -1
 var _meteor_warn: Label
+var _voice_wrap: VBoxContainer
+var _voice_mic: Label
+var _voice_list: VBoxContainer
 var _chat_log: VBoxContainer
 var _chat_wrap: Control
 var _chat_input: LineEdit
@@ -120,6 +123,7 @@ func _build() -> void:
 	_build_kill_feed()
 	_build_banner()
 	_build_meteor_warn()
+	_build_voice()
 	_build_chat()
 	_build_scoreboard()
 	_build_match_over()
@@ -321,6 +325,60 @@ func _build_meteor_warn() -> void:
 	_meteor_warn.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_meteor_warn.visible = false
 	_root.add_child(_meteor_warn)
+
+
+## Who is talking, and whether this player's own microphone is open.
+##
+## Sits above the chat log on the left, because that is where a player already
+## looks for who said what. A speaker who is dead is marked, so a live listener
+## in deathmatch knows the callout came from someone with no stake in the round
+## — and so the routing rule is visible rather than something players have to
+## take on trust.
+func _build_voice() -> void:
+	_voice_wrap = VBoxContainer.new()
+	_voice_wrap.anchor_left = 0.0
+	_voice_wrap.anchor_top = 1.0
+	_voice_wrap.anchor_right = 0.0
+	_voice_wrap.anchor_bottom = 1.0
+	_voice_wrap.offset_left = 24
+	_voice_wrap.offset_top = -260
+	_voice_wrap.offset_bottom = -180
+	_voice_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voice_wrap.add_theme_constant_override("separation", 2)
+	_root.add_child(_voice_wrap)
+
+	_voice_mic = _label("● TALKING", 13, CYAN)
+	_voice_mic.visible = false
+	_voice_wrap.add_child(_voice_mic)
+
+	_voice_list = VBoxContainer.new()
+	_voice_list.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_voice_list.add_theme_constant_override("separation", 1)
+	_voice_wrap.add_child(_voice_list)
+
+
+## Lights the local indicator while this player's microphone is open.
+func set_voice_transmitting(on: bool) -> void:
+	if _voice_mic:
+		_voice_mic.visible = on
+
+
+## Replaces the speaking list wholesale. Entries are
+## { name: String, team: int, dead: bool }, already filtered to the speakers
+## this client is actually receiving, so the HUD never has to reason about who
+## is allowed to be heard.
+func set_voice_speakers(entries: Array) -> void:
+	if _voice_list == null:
+		return
+	for child in _voice_list.get_children():
+		child.queue_free()
+	for e: Dictionary in entries:
+		var team := int(e.get("team", 0))
+		var color := BLUE if team == Protocol.TEAM_BLUE else (RED if team == Protocol.TEAM_RED else WHITE)
+		var text := "🔊 %s" % str(e.get("name", "?"))
+		if bool(e.get("dead", false)):
+			text += "  (dead)"
+		_voice_list.add_child(_label(text, 13, color))
 
 
 func _build_chat() -> void:

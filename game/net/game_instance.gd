@@ -55,6 +55,16 @@ const CHAT_BURST_WINDOW := 4.0
 const CHAT_MAX_LEN := 50
 var _chat_log: Dictionary = {}  # id → Array of timestamps
 
+## A voice frame is 20 ms, so an honest client sends 50 a second. The ceiling
+## is generous enough that a stutter which bunches two frames into one tick
+## costs nothing, and low enough that a client cannot turn one microphone into
+## a broadcast amplifier: every frame it sends is copied to every listener, so
+## unbounded input becomes unbounded egress.
+const VOICE_RATE_WINDOW := 1.0
+const VOICE_RATE_MAX := 80
+var _voice_log: Dictionary = {}   # id → Array of timestamps
+var _voice_seq: Dictionary = {}   # id → int, per-speaker frame counter
+
 const SPECIAL_MIN_WINDUP := 0.3
 const SPECIAL_AUTO_FIRE := 5.0
 const SPECIAL_RANGE := 45.0
@@ -214,6 +224,9 @@ func remove(peer_id: int) -> void:
 	participants.erase(peer_id)
 	pawns.erase(peer_id)
 	anti_cheat.on_leave(peer_id)
+	_chat_log.erase(peer_id)
+	_voice_log.erase(peer_id)
+	_voice_seq.erase(peer_id)
 	_manage_bots()
 	_roster_dirty = true
 	_refresh_empty_clock()
@@ -554,6 +567,76 @@ func handle_chat(peer_id: int, text: String, team_only: bool) -> void:
 			event_team_broadcast.emit(p.team, Protocol.CH_EVENTS, msg)
 	else:
 		event_broadcast.emit(Protocol.CH_EVENTS, msg, -1)
+
+
+# ── Voice ────────────────────────────────────────────────────────────────
+
+## Relays one microphone frame to whoever VoiceRouter says may hear it.
+##
+## The frame is forwarded byte for byte and never decoded here: the server has
+## no reason to know what a frame contains, and an ADPCM decode per listener
+## per 20 ms would be the most expensive thing in the tick. What it does decide
+## is the audience, and it re-stamps the speaker id from the session rather
+## than trusting one in the payload, so a client cannot speak as anyone else.
+func handle_voice(peer_id: int, audio: PackedByteArray) -> void:
+	if not participants.has(peer_id):
+		return
+	if audio.is_empty() or audio.size() > Protocol.VOICE_MAX_PAYLOAD:
+		return
+	if not _voice_allowed(peer_id):
+		return
+
+	var speaker: Participant = participants[peer_id]
+	var liveness := _voice_liveness()
+	var bots := {}
+	var listeners: Array[int] = []
+	for pid: int in participants:
+		var other: Participant = participants[pid]
+		bots[pid] = other.is_bot
+		listeners.append(pid)
+
+	var audience := VoiceRouter.listeners_for(peer_id, mode, listeners, liveness, bots)
+	if audience.is_empty():
+		return
+
+	var seq := int(_voice_seq.get(peer_id, 0)) + 1
+	_voice_seq[peer_id] = seq
+	var speaker_dead := not bool(liveness.get(peer_id, false))
+	# One buffer for the whole audience: what differs between listeners is
+	# whether they get it at all, not what it says.
+	var msg := Protocol.encode_voice_data(
+		peer_id, speaker.team, seq, audio, speaker_dead)
+	for listener_id in audience:
+		event_to_peer.emit(listener_id, Protocol.CH_BULK, msg)
+
+
+## Whether each participant counts as alive for voice, resolved through
+## possession so a human riding a bot is judged on the body they drive. A
+## spectator holds no team and no body, so they land on false.
+func _voice_liveness() -> Dictionary:
+	var out := {}
+	for pid: int in participants:
+		var p: Participant = participants[pid]
+		if p.team == Protocol.TEAM_NONE and p.possessing == 0:
+			out[pid] = false
+			continue
+		var body_id := _control_id(pid)
+		var pawn: ServerPawn = pawns.get(body_id)
+		out[pid] = pawn != null and pawn.alive
+	return out
+
+
+func _voice_allowed(peer_id: int) -> bool:
+	if not _voice_log.has(peer_id):
+		_voice_log[peer_id] = []
+	var log: Array = _voice_log[peer_id]
+	var cutoff := _now - VOICE_RATE_WINDOW
+	while not log.is_empty() and log[0] < cutoff:
+		log.pop_front()
+	if log.size() >= VOICE_RATE_MAX:
+		return false
+	log.append(_now)
+	return true
 
 
 func handle_set_cheats(enabled: bool) -> void:

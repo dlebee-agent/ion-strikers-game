@@ -58,6 +58,18 @@ var _shake := CameraShake.new()
 var _last_death: Dictionary = {}  # target_id -> { by, head, cause }
 var _local_ragdoll: Ragdoll
 
+var _voice_capture: VoiceCapture
+var _voice_playback: VoicePlayback
+## True while the microphone is live, whichever mode put it there. Push-to-talk
+## opens it on the key and closes it on release; open mic leaves it open and
+## lets the squelch decide what actually goes out.
+var _voice_transmitting := false
+## speaker_id → { team: int, dead: bool }, taken from the frames themselves.
+## The team and liveness a frame was sent with describe the speaker at the
+## moment they spoke, which is what the indicator should show — reading it back
+## off the current snapshot would relabel a callout the instant its speaker died.
+var _voice_meta: Dictionary = {}
+
 ## Score bar clock, as the server last reported it: seconds, and which of
 ## Protocol's CLOCK_ modes to read them as. The server owns it so every
 ## client reads the same thing and a late joiner sees the real time left in
@@ -145,6 +157,9 @@ func _ready() -> void:
 		client.roster_received.connect(_on_roster)
 		client.cheats_changed.connect(_on_cheats_changed)
 		client.cheats_denied.connect(_on_cheats_denied)
+		client.voice_received.connect(_on_voice)
+
+	_setup_voice()
 
 	if Announcer:
 		Announcer.banner_requested.connect(_on_announcer_banner)
@@ -440,6 +455,11 @@ func _physics_process(dt: float) -> void:
 		or _hud.is_settings_open() or GameConsole.is_open()
 	var now := Time.get_ticks_msec() / 1000.0
 	var frozen := _outro_active or now < _freeze_until
+
+	# Deliberately outside the alive/in-stands guard below: the dead and the
+	# spectators are exactly who voice has to keep working for.
+	_poll_voice(blocked)
+	_sync_voice_hud()
 
 	if pawn and _alive and not _in_stands and not _match_over:
 		# A blocked or frozen pawn still falls, slides to a stop, and keeps its
@@ -829,6 +849,11 @@ func _on_snap(snap: Dictionary) -> void:
 		if _remotes.has(pid):
 			_remotes[pid].queue_free()
 			_remotes.erase(pid)
+		# Their audio player and indicator entry go with them; otherwise a
+		# lobby churning players leaks one generator each.
+		if _voice_playback:
+			_voice_playback.forget(pid)
+		_voice_meta.erase(pid)
 
 
 func _on_hit(msg: Dictionary) -> void:
@@ -1274,9 +1299,118 @@ func _enter_match_over(winner: int) -> void:
 		AudioMix.play_match_over()
 
 
+# ── Voice ────────────────────────────────────────────────────────────────
+
+## Playback exists whenever the match does, so a listener hears other people
+## without owning a microphone or enabling anything. Capture is built lazily on
+## the first transmit instead: creating it opens the input device, which on
+## macOS raises a permission prompt, and nobody should see that for joining a
+## server they only meant to listen on.
+func _setup_voice() -> void:
+	if not VoicePlayback.is_supported():
+		return
+	_voice_playback = VoicePlayback.new()
+	add_child(_voice_playback)
+	_voice_playback.volume = VoiceSettings.output_linear()
+	VoiceSettings.changed.connect(_on_voice_settings_changed)
+
+
+func _on_voice_settings_changed() -> void:
+	if _voice_playback:
+		_voice_playback.volume = VoiceSettings.output_linear()
+	if _voice_capture:
+		_voice_capture.gain = VoiceSettings.mic_gain()
+		_voice_capture.squelch = VoiceSettings.squelch()
+	# Turning voice off mid-match has to actually release the microphone, not
+	# just stop sending: an open capture device shows a recording indicator in
+	# the OS and that should not outlive the setting.
+	if not VoiceSettings.enabled and _voice_transmitting:
+		_set_voice_transmitting(false)
+
+
+func _on_voice(msg: Dictionary) -> void:
+	if _voice_playback == null:
+		return
+	var speaker_id := int(msg.get("speaker_id", 0))
+	_voice_meta[speaker_id] = {
+		"team": int(msg.get("team", 0)),
+		"dead": bool(msg.get("speaker_dead", false)),
+	}
+	_voice_playback.push_frame(
+		speaker_id,
+		int(msg.get("seq", 0)),
+		msg.get("audio", PackedByteArray()) as PackedByteArray)
+
+
+func _sync_voice_hud() -> void:
+	if _voice_playback == null:
+		return
+	var entries: Array = []
+	for sid in _voice_playback.speaking_ids():
+		var meta: Dictionary = _voice_meta.get(sid, {})
+		entries.append({
+			"name": _player_names.get(sid, "Player %d" % sid),
+			"team": int(meta.get("team", 0)),
+			"dead": bool(meta.get("dead", false)),
+		})
+	_hud.set_voice_speakers(entries)
+
+
+## Called every frame from _physics_process. Open mic keeps the device running
+## for as long as voice is on; push-to-talk follows the key.
+func _poll_voice(input_blocked: bool) -> void:
+	if not VoiceSettings.enabled or not VoiceSettings.is_supported():
+		if _voice_transmitting:
+			_set_voice_transmitting(false)
+		return
+
+	var want: bool
+	if VoiceSettings.is_push_to_talk():
+		# A blocked pawn means a panel or the chat box has focus, and the voice
+		# key may well be a letter someone is typing.
+		want = not input_blocked and InputBinds.is_action_pressed("voice")
+	else:
+		want = true
+
+	if want != _voice_transmitting:
+		_set_voice_transmitting(want)
+
+
+func _set_voice_transmitting(on: bool) -> void:
+	if on:
+		if _voice_capture == null:
+			_voice_capture = VoiceCapture.new()
+			add_child(_voice_capture)
+			_voice_capture.frame_ready.connect(_on_voice_frame)
+		_voice_capture.gain = VoiceSettings.mic_gain()
+		_voice_capture.squelch = VoiceSettings.squelch()
+		if not _voice_capture.start():
+			# No device or permission refused. Say so once rather than leaving
+			# the player pressing a key that does nothing.
+			_hud.add_chat_message("", "Voice unavailable: no microphone.",
+				Protocol.TEAM_NONE, false, true)
+			VoiceSettings.set_enabled(false)
+			return
+		_voice_transmitting = true
+	else:
+		if _voice_capture:
+			_voice_capture.stop()
+		_voice_transmitting = false
+	_hud.set_voice_transmitting(_voice_transmitting)
+
+
+func _on_voice_frame(audio: PackedByteArray) -> void:
+	if client and _voice_transmitting:
+		client.send_voice(audio)
+
+
 func _on_leave() -> void:
 	ConfirmPrompt.close()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if _voice_transmitting:
+		_set_voice_transmitting(false)
+	if _voice_playback:
+		_voice_playback.clear()
 	if client:
 		client.disconnect_from_server()
 	var launcher = get_meta("_local_dedicated") if has_meta("_local_dedicated") else null

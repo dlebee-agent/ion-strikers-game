@@ -30,6 +30,14 @@ var _thick_val: Label
 var _gap_val: Label
 var _alpha_val: Label
 var _invert_check: Button
+var _voice_enable: Button
+var _voice_open_mic: Button
+var _voice_out_slider: HSlider
+var _voice_out_val: Label
+var _voice_gain_slider: HSlider
+var _voice_gain_val: Label
+var _voice_squelch_slider: HSlider
+var _voice_squelch_val: Label
 var _suit_btns: Dictionary = {}
 var _suit_desc: Label
 var _suit_preview: SuitPreview
@@ -227,7 +235,93 @@ func _build_sound_panel() -> PanelContainer:
 		AudioMix.set_music(int(v))
 		_music_val.text = "%d%%" % int(v))
 	_music_val = vv.get_meta("last_val")
+
+	_build_voice_rows(vv)
 	return vol
+
+
+## Voice lives under Volume rather than in a tab of its own: it is audio, and a
+## player looking for "why can nobody hear me" looks at the sound settings.
+##
+## The whole block is absent when the engine build cannot record or play
+## generated audio, rather than present and inert. An option that does nothing
+## is worse than a missing one, because the player spends their time on it.
+func _build_voice_rows(vv: VBoxContainer) -> void:
+	if not VoiceSettings.is_supported():
+		return
+
+	var voice_k := MarginContainer.new()
+	voice_k.add_theme_constant_override("margin_top", 24)
+	voice_k.add_child(MenuLook.kicker("Voice"))
+	vv.add_child(voice_k)
+
+	_voice_enable = Button.new()
+	_voice_enable.toggle_mode = true
+	_voice_enable.button_pressed = VoiceSettings.enabled
+	_voice_enable.text = "  Enable voice chat"
+	_voice_enable.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	MenuLook.apply_ghost(_voice_enable, 14)
+	_voice_enable.add_theme_font_override("font", MenuLook.FONT_HEADING_SB)
+	_voice_enable.toggled.connect(func(on: bool) -> void:
+		VoiceSettings.set_enabled(on)
+		_sync_voice_rows())
+	var en_m := MarginContainer.new()
+	en_m.add_theme_constant_override("margin_top", 18)
+	en_m.add_child(_voice_enable)
+	vv.add_child(en_m)
+
+	_voice_open_mic = Button.new()
+	_voice_open_mic.toggle_mode = true
+	_voice_open_mic.button_pressed = not VoiceSettings.is_push_to_talk()
+	_voice_open_mic.text = "  Open mic (off = hold %s to talk)" % InputBinds.fmt("voice")
+	_voice_open_mic.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	MenuLook.apply_ghost(_voice_open_mic, 14)
+	_voice_open_mic.add_theme_font_override("font", MenuLook.FONT_HEADING_SB)
+	_voice_open_mic.toggled.connect(func(on: bool) -> void:
+		VoiceSettings.set_mode(
+			VoiceSettings.Mode.OPEN_MIC if on else VoiceSettings.Mode.PUSH_TO_TALK)
+		_sync_voice_rows())
+	var om_m := MarginContainer.new()
+	om_m.add_theme_constant_override("margin_top", 10)
+	om_m.add_child(_voice_open_mic)
+	vv.add_child(om_m)
+
+	_voice_out_slider = _slider_row(vv, "Voice volume", "How loud other players are",
+		VoiceSettings.output_pct, func(v: float) -> void:
+			VoiceSettings.set_output_pct(int(v))
+			_voice_out_val.text = "%d%%" % int(v))
+	_voice_out_val = vv.get_meta("last_val")
+
+	_voice_gain_slider = _slider_row(vv, "Mic gain", "Raise if others say you are quiet",
+		VoiceSettings.mic_gain_pct, func(v: float) -> void:
+			VoiceSettings.set_mic_gain_pct(int(v))
+			_voice_gain_val.text = "%d%%" % int(v),
+		0.0, 200.0, 5.0, func(v: float) -> String: return "%d%%" % int(v))
+	_voice_gain_val = vv.get_meta("last_val")
+
+	_voice_squelch_slider = _slider_row(vv, "Mic threshold",
+		"Open mic only: how loud before it transmits",
+		VoiceSettings.squelch_pct, func(v: float) -> void:
+			VoiceSettings.set_squelch_pct(int(v))
+			_voice_squelch_val.text = "%d%%" % int(v),
+		0.0, 20.0, 1.0, func(v: float) -> String: return "%d%%" % int(v))
+	_voice_squelch_val = vv.get_meta("last_val")
+
+	_sync_voice_rows()
+
+
+## Greys out what the current choices make irrelevant: everything when voice is
+## off, and the threshold when push-to-talk is on, since that mode ignores it.
+func _sync_voice_rows() -> void:
+	var on: bool = VoiceSettings.enabled
+	if _voice_open_mic:
+		_voice_open_mic.disabled = not on
+	if _voice_out_slider:
+		_voice_out_slider.editable = on
+	if _voice_gain_slider:
+		_voice_gain_slider.editable = on
+	if _voice_squelch_slider:
+		_voice_squelch_slider.editable = on and not VoiceSettings.is_push_to_talk()
 
 
 func _build_mouse_panel() -> PanelContainer:

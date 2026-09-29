@@ -20,6 +20,7 @@ signal team_denied_received(msg: Dictionary)
 signal roster_received(msg: Dictionary)
 signal cheats_changed(enabled: bool)
 signal cheats_denied()
+signal voice_received(msg: Dictionary)
 
 var _host: ENetConnection
 var _peer: ENetPacketPeer
@@ -155,6 +156,16 @@ func send_chat(text: String, team_only: bool) -> void:
 		return
 	var buf := Protocol.encode_chat(my_id, _callsign, 0, text, team_only, false)
 	_peer.send(Protocol.CH_EVENTS, buf, ENetPacketPeer.FLAG_RELIABLE)
+
+
+## One microphone frame. Unreliable and sequenced on its own channel, so a late
+## frame is dropped by ENet rather than delaying anything else or arriving out
+## of order. Who hears it is the server's call, not ours.
+func send_voice(audio: PackedByteArray) -> void:
+	if not _authed or _peer == null or audio.is_empty():
+		return
+	var buf := Protocol.encode_voice(audio)
+	_peer.send(Protocol.CH_BULK, buf, 0)
 
 
 func send_set_cheats(enabled: bool, password: String) -> void:
@@ -308,3 +319,7 @@ func _on_receive(channel: int, data: PackedByteArray) -> void:
 				roster_received.emit(msg)
 			Protocol.Msg.CHEATS:
 				cheats_changed.emit(bool(msg.get("enabled", false)))
+
+	elif channel == Protocol.CH_BULK:
+		if t == Protocol.Msg.VOICE_DATA:
+			voice_received.emit(msg)

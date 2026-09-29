@@ -274,6 +274,10 @@ func _on_receive(peer_id: int, channel: int, data: PackedByteArray) -> void:
 		if t == Protocol.Msg.CHAT:
 			_handle_chat(peer_id, msg)
 
+	elif channel == Protocol.CH_BULK:
+		if t == Protocol.Msg.VOICE:
+			_handle_voice(peer_id, msg)
+
 
 func _handle_create_game(peer_id: int, msg: Dictionary) -> void:
 	if not _sessions.has(peer_id):
@@ -484,6 +488,13 @@ func _handle_chat(peer_id: int, msg: Dictionary) -> void:
 	inst.handle_chat(peer_id, str(msg.get("text", "")), bool(msg.get("team_only", false)))
 
 
+func _handle_voice(peer_id: int, msg: Dictionary) -> void:
+	var inst := _get_instance(peer_id)
+	if inst == null:
+		return
+	inst.handle_voice(peer_id, msg.get("audio", PackedByteArray()) as PackedByteArray)
+
+
 func _handle_set_cheats(peer_id: int, msg: Dictionary) -> void:
 	var inst := _get_instance(peer_id)
 	if inst == null:
@@ -626,8 +637,24 @@ func _send_raw(peer_id: int, channel: int, data: PackedByteArray) -> void:
 	if not _sessions.has(peer_id):
 		return
 	var peer: ENetPacketPeer = _sessions[peer_id]["peer"]
-	var flags := ENetPacketPeer.FLAG_RELIABLE if channel != Protocol.CH_UNRELIABLE else ENetPacketPeer.FLAG_UNSEQUENCED
-	peer.send(channel, data, flags)
+	peer.send(channel, data, _flags_for(channel))
+
+
+## Snapshots go out unsequenced because each one is whole and independent.
+##
+## Voice is neither: frames only mean anything in order, and one that arrives
+## behind a newer frame is already too late to play. Passing no flag is
+## ENet's unreliable-but-sequenced mode, which drops exactly those and keeps
+## the rest — the ordering voice needs without the retransmits it cannot use.
+## Everything else stays reliable.
+static func _flags_for(channel: int) -> int:
+	match channel:
+		Protocol.CH_UNRELIABLE:
+			return ENetPacketPeer.FLAG_UNSEQUENCED
+		Protocol.CH_BULK:
+			return 0
+		_:
+			return ENetPacketPeer.FLAG_RELIABLE
 
 
 func _peer_id(peer: ENetPacketPeer) -> int:
