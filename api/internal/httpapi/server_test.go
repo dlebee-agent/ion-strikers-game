@@ -42,10 +42,10 @@ func setup(t *testing.T) *httptest.Server {
 // fakeGameServer speaks the JSON-lines management protocol the real Godot
 // server implements, verifying that commands are signed by the API.
 type fakeGameServer struct {
-	listener       net.Listener
-	apiPublicKey   *rsa.PublicKey
-	allowCreate    bool
-	createdGameID  string
+	listener        net.Listener
+	apiPublicKey    *rsa.PublicKey
+	allowCreate     bool
+	createdGameID   string
 	sawBadSignature bool
 }
 

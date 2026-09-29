@@ -19,20 +19,20 @@ type gameListResponse struct {
 }
 
 type gameEntry struct {
-	GameID      string `json:"game_id"`
-	Name        string `json:"name"`
-	Mode        string `json:"mode"`
-	Map         string `json:"map"`
-	Players     int    `json:"players"`
-	Humans      int    `json:"humans"`
-	Max         int    `json:"max"`
-	Spectators  int    `json:"spectators"`
-	SpecMax     int    `json:"spec_max"`
-	Capacity    int    `json:"capacity"`
-	Blue        int    `json:"blue"`
-	Red         int    `json:"red"`
-	Round       int    `json:"round"`
-	BotsShoot   bool   `json:"bots_shoot"`
+	GameID     string `json:"game_id"`
+	Name       string `json:"name"`
+	Mode       string `json:"mode"`
+	Map        string `json:"map"`
+	Players    int    `json:"players"`
+	Humans     int    `json:"humans"`
+	Max        int    `json:"max"`
+	Spectators int    `json:"spectators"`
+	SpecMax    int    `json:"spec_max"`
+	Capacity   int    `json:"capacity"`
+	Blue       int    `json:"blue"`
+	Red        int    `json:"red"`
+	Round      int    `json:"round"`
+	BotsShoot  bool   `json:"bots_shoot"`
 }
 
 // ServeHTTP handles GET /v1/games.
@@ -80,19 +80,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func toEntry(g store.CachedGame) gameEntry {
 	return gameEntry{
-		GameID:    g.GameID,
-		Name:      g.DisplayName,
-		Mode:      g.Mode,
-		Map:       g.MapID,
-		Players:   g.Players,
-		Humans:    g.Humans,
-		Max:       g.MaxPlayers,
+		GameID:     g.GameID,
+		Name:       g.DisplayName,
+		Mode:       g.Mode,
+		Map:        g.MapID,
+		Players:    g.Players,
+		Humans:     g.Humans,
+		Max:        g.MaxPlayers,
 		Spectators: g.Spectators,
-		SpecMax:   g.MaxSpectators,
-		Capacity:  g.Capacity,
-		Blue:      g.ScoreBlue,
-		Red:       g.ScoreRed,
-		Round:     g.Round,
-		BotsShoot: g.BotsShoot,
+		SpecMax:    g.MaxSpectators,
+		Capacity:   g.Capacity,
+		Blue:       g.ScoreBlue,
+		Red:        g.ScoreRed,
+		Round:      g.Round,
+		BotsShoot:  g.BotsShoot,
 	}
 }
