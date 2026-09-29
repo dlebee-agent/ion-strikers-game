@@ -258,7 +258,7 @@ func _build_voice_rows(vv: VBoxContainer) -> void:
 	_voice_enable = Button.new()
 	_voice_enable.toggle_mode = true
 	_voice_enable.button_pressed = VoiceSettings.enabled
-	_voice_enable.text = "  Enable voice chat"
+	_voice_enable.text = "  Enable microphone"
 	_voice_enable.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	MenuLook.apply_ghost(_voice_enable, 14)
 	_voice_enable.add_theme_font_override("font", MenuLook.FONT_HEADING_SB)
@@ -286,7 +286,7 @@ func _build_voice_rows(vv: VBoxContainer) -> void:
 	om_m.add_child(_voice_open_mic)
 	vv.add_child(om_m)
 
-	_voice_out_slider = _slider_row(vv, "Voice volume", "How loud other players are",
+	_voice_out_slider = _slider_row(vv, "Voice volume", "How loud other players are; 0 mutes them",
 		VoiceSettings.output_pct, func(v: float) -> void:
 			VoiceSettings.set_output_pct(int(v))
 			_voice_out_val.text = "%d%%" % int(v))
@@ -316,8 +316,12 @@ func _sync_voice_rows() -> void:
 	var on: bool = VoiceSettings.enabled
 	if _voice_open_mic:
 		_voice_open_mic.disabled = not on
+	# Voice volume governs incoming audio, which the microphone toggle does not
+	# gate, so it stays live even with the mic off. Greying it out told the
+	# player they could not turn other people down unless they were transmitting,
+	# which was never true and left no visible way to mute the lobby.
 	if _voice_out_slider:
-		_voice_out_slider.editable = on
+		_voice_out_slider.editable = true
 	if _voice_gain_slider:
 		_voice_gain_slider.editable = on
 	if _voice_squelch_slider:

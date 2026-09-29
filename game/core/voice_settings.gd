@@ -9,11 +9,19 @@ signal changed
 
 const SETTINGS_PATH := "user://settings.cfg"
 
-## Off by default. A game that opens a microphone the first time someone joins a
-## server, without being asked, is a game people uninstall — and on macOS the
-## first capture attempt raises a system permission prompt, which should follow
-## a deliberate choice rather than ambush a player mid-match.
-const DEFAULT_ENABLED := false
+## On by default, because push-to-talk is what makes that safe.
+##
+## This gates the microphone only: incoming voice is never gated, so a player
+## hears the lobby from their first match either way. The worry was opening a
+## capture device nobody asked for — but in push-to-talk the device does not open
+## until the talk key is held, and that keypress is itself the consent. On macOS
+## the system permission prompt therefore fires at a moment the player chose
+## rather than mid-firefight.
+##
+## Defaulting this off cost more than it protected: a voice feature nobody
+## enables is a voice feature nobody has. Open mic is the mode that genuinely
+## transmits unprompted, and that stays opt-in.
+const DEFAULT_ENABLED := true
 const DEFAULT_OUTPUT_PCT := 100
 const DEFAULT_MIC_GAIN_PCT := 100
 ## Open-mic threshold as a percentage of full scale. Low enough for normal
