@@ -16,16 +16,25 @@ func _init() -> void:
 	api_url = _read_api_url()
 
 
+## Every call states the wire version this build speaks, so the API can pick a
+## server that can actually talk to us. Without it the API has to guess from the
+## version that shipped before this field existed, and a deployment running two
+## generations of server would hand us one at random — refused at the ENet
+## handshake, with nothing in the HTTP answer explaining why.
 func list_games() -> Dictionary:
-	return await _http(HTTPClient.METHOD_GET, "/v1/games")
+	return await _http(HTTPClient.METHOD_GET,
+		"/v1/games?protocol=%d" % Protocol.PROTOCOL_VERSION)
 
 
 func create_game(settings: Dictionary) -> Dictionary:
-	return await _http(HTTPClient.METHOD_POST, "/v1/games", settings)
+	var payload := settings.duplicate()
+	payload["protocol_version"] = Protocol.PROTOCOL_VERSION
+	return await _http(HTTPClient.METHOD_POST, "/v1/games", payload)
 
 
 func join_game(game_id: String) -> Dictionary:
-	return await _http(HTTPClient.METHOD_POST, "/v1/games/%s/join" % game_id)
+	return await _http(HTTPClient.METHOD_POST, "/v1/games/%s/join" % game_id,
+		{"protocol_version": Protocol.PROTOCOL_VERSION})
 
 
 func _read_api_url() -> String:

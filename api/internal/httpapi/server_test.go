@@ -33,7 +33,7 @@ func init() {
 func setup(t *testing.T) *httptest.Server {
 	t.Helper()
 	reg := serverreg.New(store.NewMemoryStore(), 30*time.Second, 60*time.Second)
-	api := httpapi.New(reg, joinSecret)
+	api := httpapi.New(reg, joinSecret, 1)
 	ts := httptest.NewServer(api.Mux)
 	t.Cleanup(ts.Close)
 	return ts

@@ -16,28 +16,48 @@ import (
 type Handler struct {
 	Registry        *serverreg.Registry
 	JoinTokenSecret string
+
+	// AssumedProtocolVersion is used when a request does not state one. See
+	// config.Config for why this is a real version rather than a wildcard.
+	AssumedProtocolVersion int
 }
 
 // CreateRequest mirrors the web create screen fields.
 type CreateRequest struct {
-	Mode          string `json:"mode"`
-	Map           string `json:"map"`
-	Rounds        int    `json:"rounds,omitempty"`
-	Kills         int    `json:"kills,omitempty"`
-	MaxPlayers    int    `json:"max_players"`
-	MaxSpectators int    `json:"max_spectators"`
-	Bots          bool   `json:"bots"`
-	BotsShoot     bool   `json:"bots_shoot"`
-	BotsMove      bool   `json:"bots_move"`
-	BotSkill      string `json:"bot_skill,omitempty"`
-	DisplayName   string `json:"display_name,omitempty"`
+	// ProtocolVersion is the wire version the calling client speaks. Omitted by
+	// builds that predate the field, in which case AssumedProtocolVersion
+	// applies. A lobby is only ever created on a server that matches, so a
+	// client is never sent somewhere its handshake will be refused.
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	Mode            string `json:"mode"`
+	Map             string `json:"map"`
+	Rounds          int    `json:"rounds,omitempty"`
+	Kills           int    `json:"kills,omitempty"`
+	MaxPlayers      int    `json:"max_players"`
+	MaxSpectators   int    `json:"max_spectators"`
+	Bots            bool   `json:"bots"`
+	BotsShoot       bool   `json:"bots_shoot"`
+	BotsMove        bool   `json:"bots_move"`
+	BotSkill        string `json:"bot_skill,omitempty"`
+	DisplayName     string `json:"display_name,omitempty"`
+}
+
+// JoinRequest is the optional body on a join. Older clients send none at all,
+// so every field has to be optional and the decode has to tolerate an empty
+// body exactly as create already does.
+type JoinRequest struct {
+	ProtocolVersion int `json:"protocol_version,omitempty"`
 }
 
 type ConnectResponse struct {
-	Host      string     `json:"host"`
-	Port      int        `json:"port"`
-	GameID    string     `json:"game_id"`
-	JoinToken auth.Token `json:"join_token"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	GameID string `json:"game_id"`
+	// ProtocolVersion the assigned host speaks. Echoed back so a client can
+	// assert it got what it asked for rather than discovering a mismatch at the
+	// handshake, and so the field is visible to anyone reading the response.
+	ProtocolVersion int        `json:"protocol_version"`
+	JoinToken       auth.Token `json:"join_token"`
 }
 
 // ServeCreate handles POST /v1/games.
@@ -57,7 +77,7 @@ func (h *Handler) ServeCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	srv, err := h.Registry.SelectCreateHost()
+	srv, err := h.Registry.SelectCreateHost(h.protocolFor(req.ProtocolVersion))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -84,6 +104,14 @@ func (h *Handler) ServeCreate(w http.ResponseWriter, r *http.Request) {
 	writeConnect(w, srv, created.GameID, h.JoinTokenSecret)
 }
 
+// protocolFor resolves the version a request should be matched against.
+func (h *Handler) protocolFor(stated int) int {
+	if stated > 0 {
+		return stated
+	}
+	return h.AssumedProtocolVersion
+}
+
 // ServeJoin handles POST /v1/games/{id}/join.
 func (h *Handler) ServeJoin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -97,9 +125,28 @@ func (h *Handler) ServeJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req JoinRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	srv, err := h.Registry.FindGameOwner(gameID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Unlike create, join has no choice of host: the lobby lives where it lives.
+	// So the only useful thing to do with a mismatch is say so plainly, rather
+	// than issue a token for a server that will refuse the handshake.
+	if want := h.protocolFor(req.ProtocolVersion); srv.ProtocolVersion != want {
+		http.Error(w, fmt.Sprintf(
+			"game %q runs protocol %d, client speaks %d",
+			gameID, srv.ProtocolVersion, want), http.StatusConflict)
 		return
 	}
 
@@ -121,10 +168,11 @@ func writeConnect(w http.ResponseWriter, srv store.ServerRecord, gameID, secret 
 	host, port := parseEndpoint(srv.Endpoint)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ConnectResponse{
-		Host:      host,
-		Port:      port,
-		GameID:    gameID,
-		JoinToken: auth.Mint(secret, gameID),
+		Host:            host,
+		Port:            port,
+		GameID:          gameID,
+		ProtocolVersion: srv.ProtocolVersion,
+		JoinToken:       auth.Mint(secret, gameID),
 	})
 }
 

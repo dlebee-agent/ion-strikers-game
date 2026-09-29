@@ -36,7 +36,7 @@ func runServer() {
 
 	go evictLoop(reg, cfg.HeartbeatTTL)
 
-	srv := httpapi.New(reg, cfg.JoinTokenSecret)
+	srv := httpapi.New(reg, cfg.JoinTokenSecret, cfg.AssumedProtocolVersion)
 	log.Printf("[gameapi] listening on %s (store=%s)", cfg.ListenAddr, cfg.Store)
 	if err := http.ListenAndServe(cfg.ListenAddr, srv.Mux); err != nil {
 		log.Fatalf("listen: %v", err)

@@ -22,21 +22,35 @@ type Server struct {
 	Registry        *serverreg.Registry
 	JoinTokenSecret string
 	Mux             *http.ServeMux
+
+	// AssumedProtocolVersion is handed to both handlers so create, join and
+	// browse agree on what an unversioned client is. They must agree: a client
+	// that browses as one generation and joins as another sees lobbies it is
+	// then refused from.
+	AssumedProtocolVersion int
 }
 
-func New(reg *serverreg.Registry, joinTokenSecret string) *Server {
+func New(reg *serverreg.Registry, joinTokenSecret string, assumedProtocolVersion int) *Server {
 	s := &Server{
-		Registry:        reg,
-		JoinTokenSecret: joinTokenSecret,
-		Mux:             http.NewServeMux(),
+		Registry:               reg,
+		JoinTokenSecret:        joinTokenSecret,
+		Mux:                    http.NewServeMux(),
+		AssumedProtocolVersion: assumedProtocolVersion,
 	}
 	s.routes()
 	return s
 }
 
 func (s *Server) routes() {
-	disc := &discovery.Handler{Registry: s.Registry}
-	lob := &lobby.Handler{Registry: s.Registry, JoinTokenSecret: s.JoinTokenSecret}
+	disc := &discovery.Handler{
+		Registry:               s.Registry,
+		AssumedProtocolVersion: s.AssumedProtocolVersion,
+	}
+	lob := &lobby.Handler{
+		Registry:               s.Registry,
+		JoinTokenSecret:        s.JoinTokenSecret,
+		AssumedProtocolVersion: s.AssumedProtocolVersion,
+	}
 
 	s.Mux.HandleFunc("/v1/games", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
